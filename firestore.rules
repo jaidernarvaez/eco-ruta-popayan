@@ -1,0 +1,113 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────
+//  EcoRuta Popayán · Reglas de seguridad de Cloud Firestore
+//  Colecciones: users, trucks, neighborhoods, schedules
+// ─────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Funciones auxiliares ────────────────────────────────
+    function signedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function hasProfile() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function isAdmin()  { return hasProfile() && role() == 'admin'; }
+    function isDriver() { return hasProfile() && role() in ['conductor', 'admin']; }
+
+    function validWasteType(t) { return t in ['ordinario', 'reciclable']; }
+
+    // Coordenadas dentro del área urbana aproximada de Popayán
+    function inPopayan(p) {
+      return p is latlng
+        && p.latitude()  >= 2.38  && p.latitude()  <= 2.50
+        && p.longitude() >= -76.67 && p.longitude() <= -76.55;
+    }
+
+    // ── users/{uid}: perfil y rol ───────────────────────────
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+
+      // Cada usuario crea su propio perfil; 'admin' solo se asigna desde la consola.
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['email', 'role', 'createdAt'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role in ['ciudadano', 'conductor']
+        && request.resource.data.createdAt == request.time;
+
+      // Solo puede cambiar su rol entre ciudadano y conductor (modo prueba).
+      allow update: if signedIn() && request.auth.uid == uid
+        && resource.data.role != 'admin'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+        && request.resource.data.role in ['ciudadano', 'conductor'];
+
+      allow delete: if isAdmin();
+    }
+
+    // ── trucks/{truckId}: camiones y su posición GPS ────────
+    function validTruck(d) {
+      return d.keys().hasOnly(['plate', 'wasteType', 'status', 'location', 'driverId',
+                               'driverEmail', 'neighborhoodId', 'updatedAt'])
+        && d.keys().hasAll(['plate', 'wasteType', 'status', 'location', 'driverId', 'updatedAt'])
+        && d.plate is string && d.plate.matches('^[A-Z]{3}[0-9]{3}$')
+        && validWasteType(d.wasteType)
+        && d.status in ['en_ruta', 'detenido', 'fuera_de_servicio']
+        && inPopayan(d.location)
+        && (!('neighborhoodId' in d) || d.neighborhoodId == null || d.neighborhoodId is string)
+        && d.updatedAt == request.time;
+    }
+
+    match /trucks/{truckId} {
+      allow read: if signedIn();
+
+      allow create: if isDriver()
+        && validTruck(request.resource.data)
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.driverEmail == request.auth.token.email;
+
+      // Un conductor solo mueve SU camión; no puede cambiar placa, tipo ni dueño.
+      allow update: if isDriver()
+        && (resource.data.driverId == request.auth.uid || isAdmin())
+        && validTruck(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['location', 'status', 'neighborhoodId', 'updatedAt']);
+
+      allow delete: if isAdmin() || (isDriver() && resource.data.driverId == request.auth.uid);
+    }
+
+    // ── neighborhoods/{id}: barrios (información pública) ───
+    match /neighborhoods/{id} {
+      allow read: if true;
+      // Conductores pueden CREAR los datos de ejemplo; solo admin modifica o borra.
+      allow create: if isDriver()
+        && request.resource.data.keys().hasOnly(['name', 'commune', 'center'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 60
+        && request.resource.data.commune is int
+        && inPopayan(request.resource.data.center);
+      allow update, delete: if isAdmin();
+    }
+
+    // ── schedules/{id}: horarios de recolección (públicos) ──
+    match /schedules/{id} {
+      allow read: if true;
+      allow create: if isDriver()
+        && request.resource.data.keys().hasOnly(['neighborhoodId', 'wasteType', 'days', 'startTime', 'endTime'])
+        && exists(/databases/$(database)/documents/neighborhoods/$(request.resource.data.neighborhoodId))
+        && validWasteType(request.resource.data.wasteType)
+        && request.resource.data.days is list && request.resource.data.days.size() <= 7
+        && request.resource.data.startTime.matches('^[0-2][0-9]:[0-5][0-9]$')
+        && request.resource.data.endTime.matches('^[0-2][0-9]:[0-5][0-9]$');
+      allow update, delete: if isAdmin();
+    }
+
+    // Todo lo demás queda bloqueado
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
