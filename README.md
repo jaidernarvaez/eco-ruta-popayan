@@ -48,14 +48,42 @@ Requisitos (una sola vez, en la consola de Firebase):
 
 > Nota: en esta etapa de pruebas cualquier usuario puede pasar de ciudadano a conductor. En producción, el rol de conductor debería asignarlo un administrador.
 
+## Etapa 3 — Experiencia ciudadana y despliegue
+Ejecuta **`etapa3-despliegue.bat`**: compila la versión de producción, publica las reglas y la app en
+Firebase Hosting, hace commit/push y abre **https://ecoruta-popayan.web.app**.
+
+Novedades:
+- **Ciudadano:** barra superior con filtro rápido (Todos / Ordinarios / Reciclables, con contador),
+  selector de barrio que centra el mapa, tarjetas de **estado en vivo** (placa, estado, distancia
+  aproximada y hace cuánto se actualizó) y horarios del barrio.
+- **Reporte ciudadano / Alerta ambiental:** el vecino marca un punto en el mapa (o usa su ubicación)
+  e indica *acumulación de bolsas* o *recolección prioritaria*. Se guarda en `reports`.
+- **Conductor:** panel de controles en tarjetas de altura automática (responsivo en celular) y lista de
+  reportes ordenada por prioridad y cercanía, con opción de marcarlos como **atendidos**.
+
+### Colección `reports`
+| Campo | Descripción |
+|---|---|
+| `type` | `acumulacion` \| `recoleccion_prioritaria` |
+| `description` | Texto opcional (máx. 280 caracteres) |
+| `location` | GeoPoint dentro de Popayán |
+| `neighborhoodId` | Barrio más cercano (o `null`) |
+| `status` | `abierto` \| `atendido` |
+| `createdBy`, `createdAt` | Autor (uid, sin correo) y fecha |
+| `attendedBy`, `attendedAt` | Conductor que lo atendió y fecha |
+
+Reglas: cualquier usuario autenticado lee y crea reportes a su nombre; solo un conductor los marca
+como atendidos; el autor puede retirar el suyo.
+
 ## Estructura
 ```
 src/
-├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaPopayan
+├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaPopayan, ReportDialog
 ├── context/      AuthContext (sesión + perfil/rol)
-├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules)
+├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules, reports), useNow
 ├── data/seed.ts  Barrios y horarios de ejemplo
 ├── lib/          firebase.ts, magicLink.ts, geo.ts
 └── types.ts
 firestore.rules   Reglas de seguridad
+firebase.json     Reglas + Firebase Hosting (carpeta dist, SPA)
 ```

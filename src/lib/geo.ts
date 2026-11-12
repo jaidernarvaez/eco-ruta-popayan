@@ -16,3 +16,22 @@ export function insidePopayan(lat: number, lng: number) {
   const b = POPAYAN_BOUNDS
   return lat >= b.minLat && lat <= b.maxLat && lng >= b.minLng && lng <= b.maxLng
 }
+
+export function formatDistance(meters: number) {
+  return meters < 1000 ? `${Math.round(meters / 10) * 10} m` : `${(meters / 1000).toFixed(1)} km`
+}
+
+/** Barrio más cercano (dentro de `maxMeters`) a una coordenada. */
+export function nearestNeighborhood<T extends { id: string; center: { latitude: number; longitude: number } }>(
+  lat: number,
+  lng: number,
+  list: T[],
+  maxMeters = 700,
+): string | null {
+  let best: { id: string | null; d: number } = { id: null, d: maxMeters }
+  for (const n of list) {
+    const d = distanceMeters(lat, lng, n.center.latitude, n.center.longitude)
+    if (d < best.d) best = { id: n.id, d }
+  }
+  return best.id
+}

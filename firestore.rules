@@ -2,7 +2,7 @@ rules_version = '2';
 
 // ─────────────────────────────────────────────────────────────
 //  EcoRuta Popayán · Reglas de seguridad de Cloud Firestore
-//  Colecciones: users, trucks, neighborhoods, schedules
+//  Colecciones: users, trucks, neighborhoods, schedules, reports
 // ─────────────────────────────────────────────────────────────
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -103,6 +103,41 @@ service cloud.firestore {
         && request.resource.data.startTime.matches('^[0-2][0-9]:[0-5][0-9]$')
         && request.resource.data.endTime.matches('^[0-2][0-9]:[0-5][0-9]$');
       allow update, delete: if isAdmin();
+    }
+
+    // ── reports/{id}: reportes ciudadanos / alertas ambientales ──
+    match /reports/{reportId} {
+      // Cualquier usuario autenticado (ciudadano o conductor) puede verlos.
+      allow read: if signedIn();
+
+      // Cualquier usuario autenticado con perfil puede crear un reporte a su nombre.
+      allow create: if hasProfile()
+        && request.resource.data.keys().hasOnly(['type', 'description', 'location', 'neighborhoodId',
+                                                 'status', 'createdBy', 'createdAt'])
+        && request.resource.data.keys().hasAll(['type', 'description', 'location', 'status',
+                                                'createdBy', 'createdAt'])
+        && request.resource.data.type in ['acumulacion', 'recoleccion_prioritaria']
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 280
+        && inPopayan(request.resource.data.location)
+        && (!('neighborhoodId' in request.resource.data)
+            || request.resource.data.neighborhoodId == null
+            || request.resource.data.neighborhoodId is string)
+        && request.resource.data.status == 'abierto'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+
+      // Solo un conductor puede marcarlo como atendido (y nada más).
+      allow update: if isDriver()
+        && resource.data.status == 'abierto'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'attendedBy', 'attendedAt'])
+        && request.resource.data.status == 'atendido'
+        && request.resource.data.attendedBy == request.auth.uid
+        && request.resource.data.attendedAt == request.time;
+
+      // El autor puede retirar su reporte; el admin puede borrar cualquiera.
+      allow delete: if signedIn() && (resource.data.createdBy == request.auth.uid || isAdmin());
     }
 
     // Todo lo demás queda bloqueado

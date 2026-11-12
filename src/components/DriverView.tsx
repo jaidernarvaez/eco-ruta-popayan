@@ -8,22 +8,41 @@ import {
   serverTimestamp,
   updateDoc,
 } from 'firebase/firestore'
-import { Database, MousePointerClick, Pause, Play, Plus, Trash } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  MousePointerClick,
+  Navigation,
+  Pause,
+  Play,
+  Plus,
+  Siren,
+  Trash,
+  Truck as TruckIcon,
+} from 'lucide-react'
 import MapaPopayan, { POPAYAN_CENTRO } from './MapaPopayan'
 import { db } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
-import { useNeighborhoods, useTrucks } from '../hooks/useFirestoreData'
-import { seedBaseData } from '../data/seed'
-import { distanceMeters, insidePopayan } from '../lib/geo'
-import { STATUS_LABEL, type TruckStatus, type WasteType } from '../types'
+import { useNeighborhoods, useOpenReports, useTrucks } from '../hooks/useFirestoreData'
+import { timeAgo, useNow } from '../hooks/useNow'
+import { NEIGHBORHOODS_SEED, seedBaseData } from '../data/seed'
+import { distanceMeters, formatDistance, insidePopayan, nearestNeighborhood } from '../lib/geo'
+import { REPORT_LABEL, STATUS_LABEL, type Report, type TruckStatus, type WasteType } from '../types'
 
 const STEP_DEG = 0.0007 // ~78 m por paso
 const TICK_MS = 2000 // una escritura en Firestore cada 2 s
 
+const card = 'rounded-xl bg-white p-4 shadow space-y-3'
+const cardTitle = 'flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500'
+const btn = 'flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold'
+
 export default function DriverView() {
   const { user } = useAuth()
   const { items: trucks, error } = useTrucks()
-  const { items: neighborhoods } = useNeighborhoods()
+  const { items: neighborhoods, stored } = useNeighborhoods()
+  const { items: reports } = useOpenReports()
+  const now = useNow(15000)
 
   const myTrucks = useMemo(() => trucks.filter((t) => t.driverId === user?.uid), [trucks, user])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -34,6 +53,8 @@ export default function DriverView() {
   const [message, setMessage] = useState<string | null>(null)
   const [simulating, setSimulating] = useState(false)
   const [lastWrite, setLastWrite] = useState<string | null>(null)
+  const [seeding, setSeeding] = useState(false)
+  const [focus, setFocus] = useState<[number, number] | null>(null)
 
   // Ruta de simulación: recorre los centros de los barrios en orden
   const route = useMemo(
@@ -47,22 +68,31 @@ export default function DriverView() {
     if (myTruck) posRef.current = [myTruck.location.latitude, myTruck.location.longitude]
   }, [myTruck])
 
+  // Reportes ordenados por cercanía al camión seleccionado
+  const reportsByDistance = useMemo(() => {
+    const from = myTruck ? [myTruck.location.latitude, myTruck.location.longitude] : POPAYAN_CENTRO
+    return reports
+      .map((r) => ({ r, meters: distanceMeters(from[0], from[1], r.location.latitude, r.location.longitude) }))
+      .sort((a, b) => {
+        // Primero las solicitudes prioritarias, luego por distancia
+        const pa = a.r.type === 'recoleccion_prioritaria' ? 0 : 1
+        const pb = b.r.type === 'recoleccion_prioritaria' ? 0 : 1
+        return pa - pb || a.meters - b.meters
+      })
+  }, [reports, myTruck])
+
   async function moveTruck(lat: number, lng: number, extra: Record<string, unknown> = {}) {
-    if (!myTruck) return
+    if (!myTruck) {
+      setMessage('Primero registra o selecciona un camión.')
+      return
+    }
     if (!insidePopayan(lat, lng)) {
       setMessage('Esa ubicación está fuera del área de Popayán.')
       return
     }
-    const nearest = neighborhoods.reduce<{ id: string | null; d: number }>(
-      (acc, n) => {
-        const d = distanceMeters(lat, lng, n.center.latitude, n.center.longitude)
-        return d < acc.d ? { id: n.id, d } : acc
-      },
-      { id: null, d: 600 },
-    )
     await updateDoc(doc(db, 'trucks', myTruck.id), {
       location: new GeoPoint(lat, lng),
-      neighborhoodId: nearest.id,
+      neighborhoodId: nearestNeighborhood(lat, lng, neighborhoods, 600),
       updatedAt: serverTimestamp(),
       ...extra,
     })
@@ -102,28 +132,35 @@ export default function DriverView() {
       setMessage('La placa debe tener el formato ABC123.')
       return
     }
-    const start = route[0] ?? POPAYAN_CENTRO
-    const ref = await addDoc(collection(db, 'trucks'), {
-      plate: cleanPlate,
-      wasteType,
-      status: 'detenido',
-      location: new GeoPoint(start[0], start[1]),
-      driverId: user.uid,
-      driverEmail: user.email,
-      neighborhoodId: null,
-      updatedAt: serverTimestamp(),
-    })
-    setSelectedId(ref.id)
-    setPlate('')
-    setMessage(`Camión ${cleanPlate} registrado.`)
+    try {
+      const start = route[0] ?? POPAYAN_CENTRO
+      const ref = await addDoc(collection(db, 'trucks'), {
+        plate: cleanPlate,
+        wasteType,
+        status: 'detenido',
+        location: new GeoPoint(start[0], start[1]),
+        driverId: user.uid,
+        driverEmail: user.email,
+        neighborhoodId: null,
+        updatedAt: serverTimestamp(),
+      })
+      setSelectedId(ref.id)
+      setPlate('')
+      setMessage(`Camión ${cleanPlate} registrado.`)
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    }
   }
 
   async function seed() {
+    setSeeding(true)
     try {
-      const r = await seedBaseData()
-      setMessage(r === 'creado' ? 'Barrios y horarios de ejemplo cargados.' : 'Los datos de ejemplo ya existían.')
+      const n = await seedBaseData()
+      setMessage(n > 0 ? `Se cargaron ${n} registros de ejemplo (barrios y horarios).` : 'Los datos de ejemplo ya estaban completos.')
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSeeding(false)
     }
   }
 
@@ -140,22 +177,31 @@ export default function DriverView() {
     setSelectedId(null)
   }
 
-  const btn = 'flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold'
+  async function attendReport(r: Report) {
+    if (!user) return
+    try {
+      await updateDoc(doc(db, 'reports', r.id), {
+        status: 'atendido',
+        attendedBy: user.uid,
+        attendedAt: serverTimestamp(),
+      })
+      setMessage(`Reporte marcado como atendido.`)
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const seedComplete = stored >= NEIGHBORHOODS_SEED.length
 
   return (
-    <div className="grid h-full grid-cols-1 gap-4 p-4 md:grid-cols-[320px_1fr]">
-      <aside className="space-y-5 overflow-y-auto rounded-xl bg-white p-4 shadow">
-        {neighborhoods.length === 0 && (
-          <section className="space-y-2 rounded-lg bg-amber-50 p-3">
-            <p className="text-sm text-amber-800">La base de datos no tiene barrios ni horarios todavía.</p>
-            <button onClick={seed} className={`${btn} w-full bg-amber-500 text-white hover:bg-amber-600`}>
-              <Database className="h-4 w-4" /> Cargar datos de ejemplo
-            </button>
-          </section>
-        )}
-
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Mis camiones</h2>
+    <div className="space-y-4 p-3 sm:p-4">
+      {/* Panel de controles: altura automática, sin scroll interno */}
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/* 1. Datos y mis camiones */}
+        <div className={card}>
+          <h2 className={cardTitle}>
+            <TruckIcon className="h-4 w-4" /> Mis camiones
+          </h2>
           {myTrucks.length > 0 ? (
             <select
               value={myTruck?.id ?? ''}
@@ -172,12 +218,30 @@ export default function DriverView() {
               ))}
             </select>
           ) : (
-            <p className="text-sm text-slate-500">Registra un camión para empezar a simular.</p>
+            <p className="text-sm text-slate-500">Aún no tienes camiones. Registra uno para simular.</p>
           )}
-        </section>
+          <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+            <p>
+              Barrios en la base: <strong>{stored}</strong> / {NEIGHBORHOODS_SEED.length}
+            </p>
+          </div>
+          <button
+            onClick={seed}
+            disabled={seeding}
+            className={`${btn} w-full ${
+              seedComplete ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-amber-500 text-white hover:bg-amber-600'
+            } disabled:opacity-60`}
+          >
+            <Database className="h-4 w-4" />
+            {seeding ? 'Cargando…' : seedComplete ? 'Verificar datos de ejemplo' : 'Cargar datos de ejemplo'}
+          </button>
+        </div>
 
-        <section className="space-y-2 rounded-lg border border-slate-200 p-3">
-          <h3 className="text-sm font-semibold">Registrar camión</h3>
+        {/* 2. Registrar camión */}
+        <div className={card}>
+          <h2 className={cardTitle}>
+            <Plus className="h-4 w-4" /> Registrar camión
+          </h2>
           <input
             value={plate}
             onChange={(e) => setPlate(e.target.value)}
@@ -196,66 +260,129 @@ export default function DriverView() {
           <button onClick={createTruck} className={`${btn} w-full bg-eco-600 text-white hover:bg-eco-700`}>
             <Plus className="h-4 w-4" /> Registrar
           </button>
-        </section>
+        </div>
 
-        {myTruck && (
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-              Simulador · {myTruck.plate}
-            </h2>
-            <div className="grid grid-cols-3 gap-1">
-              {(Object.keys(STATUS_LABEL) as TruckStatus[]).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setStatus(s)}
-                  className={`rounded-md px-2 py-1 text-xs font-medium ${
-                    myTruck.status === s ? 'bg-eco-600 text-white' : 'bg-slate-100 hover:bg-slate-200'
-                  }`}
-                >
-                  {STATUS_LABEL[s]}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setSimulating((v) => !v)}
-              disabled={route.length < 2}
-              className={`${btn} w-full text-white disabled:opacity-50 ${
-                simulating ? 'bg-red-500 hover:bg-red-600' : 'bg-eco-600 hover:bg-eco-700'
-              }`}
-            >
-              {simulating ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              {simulating ? 'Detener recorrido automático' : 'Iniciar recorrido automático'}
-            </button>
-            <p className="flex items-start gap-2 text-xs text-slate-600">
-              <MousePointerClick className="mt-0.5 h-4 w-4 shrink-0" />
-              También puedes hacer clic en el mapa para mover el camión a ese punto.
-            </p>
-            <div className="rounded-lg bg-slate-50 p-3 font-mono text-xs text-slate-700">
-              <p>lat: {myTruck.location.latitude.toFixed(5)}</p>
-              <p>lng: {myTruck.location.longitude.toFixed(5)}</p>
-              <p>barrio: {neighborhoods.find((n) => n.id === myTruck.neighborhoodId)?.name ?? '—'}</p>
-              <p>última escritura: {lastWrite ?? '—'}</p>
-            </div>
-            <button onClick={removeTruck} className={`${btn} w-full text-red-600 hover:bg-red-50`}>
-              <Trash className="h-4 w-4" /> Eliminar camión
-            </button>
-          </section>
-        )}
+        {/* 3. Simulador */}
+        <div className={card}>
+          <h2 className={cardTitle}>
+            <Navigation className="h-4 w-4" /> Simulador {myTruck && `· ${myTruck.plate}`}
+          </h2>
+          {myTruck ? (
+            <>
+              <div className="grid grid-cols-3 gap-1">
+                {(Object.keys(STATUS_LABEL) as TruckStatus[]).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setStatus(s)}
+                    className={`rounded-md px-1 py-1.5 text-xs font-medium ${
+                      myTruck.status === s ? 'bg-eco-600 text-white' : 'bg-slate-100 hover:bg-slate-200'
+                    }`}
+                  >
+                    {STATUS_LABEL[s]}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setSimulating((v) => !v)}
+                disabled={route.length < 2}
+                className={`${btn} w-full text-white disabled:opacity-50 ${
+                  simulating ? 'bg-red-500 hover:bg-red-600' : 'bg-eco-600 hover:bg-eco-700'
+                }`}
+              >
+                {simulating ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {simulating ? 'Detener recorrido' : 'Iniciar recorrido automático'}
+              </button>
+              <p className="flex items-start gap-2 text-xs text-slate-600">
+                <MousePointerClick className="mt-0.5 h-4 w-4 shrink-0" />
+                O toca el mapa para mover el camión a ese punto.
+              </p>
+              <div className="grid grid-cols-2 gap-x-2 rounded-lg bg-slate-50 p-2 font-mono text-[11px] text-slate-700">
+                <span>lat {myTruck.location.latitude.toFixed(5)}</span>
+                <span>lng {myTruck.location.longitude.toFixed(5)}</span>
+                <span className="col-span-2 truncate">
+                  barrio: {neighborhoods.find((n) => n.id === myTruck.neighborhoodId)?.name ?? '—'}
+                </span>
+                <span className="col-span-2">última escritura: {lastWrite ?? '—'}</span>
+              </div>
+              <button onClick={removeTruck} className={`${btn} w-full py-1.5 text-red-600 hover:bg-red-50`}>
+                <Trash className="h-4 w-4" /> Eliminar camión
+              </button>
+            </>
+          ) : (
+            <p className="text-sm text-slate-500">Registra o selecciona un camión para activar el simulador.</p>
+          )}
+        </div>
 
-        {(message || error) && (
-          <p className="rounded-lg bg-slate-100 p-3 text-sm text-slate-700">{error ?? message}</p>
-        )}
-      </aside>
+        {/* 4. Reportes ciudadanos */}
+        <div className={card}>
+          <h2 className={cardTitle}>
+            <AlertTriangle className="h-4 w-4 text-orange-600" /> Reportes ciudadanos ({reports.length})
+          </h2>
+          {reports.length === 0 && <p className="text-sm text-slate-500">No hay reportes abiertos. ¡Todo limpio!</p>}
+          <ul className="space-y-2">
+            {reportsByDistance.slice(0, 5).map(({ r, meters }) => (
+              <li key={r.id} className="rounded-lg border border-orange-200 bg-orange-50 p-2 text-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="flex items-center gap-1 font-medium text-orange-900">
+                    {r.type === 'recoleccion_prioritaria' ? (
+                      <Siren className="h-4 w-4 text-red-600" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4" />
+                    )}
+                    {REPORT_LABEL[r.type]}
+                  </p>
+                  <span className="whitespace-nowrap text-xs font-semibold text-orange-800">{formatDistance(meters)}</span>
+                </div>
+                <p className="text-xs text-orange-800/80">
+                  {neighborhoods.find((n) => n.id === r.neighborhoodId)?.name ?? 'Sin barrio'} ·{' '}
+                  {timeAgo(r.createdAt?.toMillis(), now)}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => setFocus([r.location.latitude, r.location.longitude])}
+                    className="rounded-md bg-white px-2 py-1 text-xs font-medium shadow-sm"
+                  >
+                    Ver en mapa
+                  </button>
+                  <button
+                    onClick={() => attendReport(r)}
+                    className="flex items-center gap-1 rounded-md bg-eco-600 px-2 py-1 text-xs font-medium text-white"
+                  >
+                    <CheckCircle2 className="h-3 w-3" /> Atendido
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {reports.length > 5 && <p className="text-xs text-slate-500">+{reports.length - 5} más en el mapa</p>}
+        </div>
+      </section>
 
-      <section className="min-h-[420px] overflow-hidden rounded-xl shadow">
+      {(message || error) && (
+        <p className="rounded-lg bg-white p-3 text-sm text-slate-700 shadow">{error ?? message}</p>
+      )}
+
+      <section className="h-[60vh] min-h-[380px] overflow-hidden rounded-xl shadow">
         <MapaPopayan
           trucks={trucks}
           neighborhoods={neighborhoods}
+          reports={reports}
           highlightTruckId={myTruck?.id}
+          focus={focus}
+          picking={!!myTruck}
           onMapClick={(lat, lng) => {
             setSimulating(false)
             moveTruck(lat, lng).catch((e) => setMessage(e instanceof Error ? e.message : String(e)))
           }}
+          renderReportActions={(r) => (
+            <button
+              onClick={() => attendReport(r)}
+              style={{ marginTop: 6, display: 'block' }}
+              className="rounded bg-eco-600 px-2 py-1 text-xs font-semibold text-white"
+            >
+              Marcar como atendido
+            </button>
+          )}
         />
       </section>
     </div>

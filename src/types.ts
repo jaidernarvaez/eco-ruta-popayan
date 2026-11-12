@@ -56,3 +56,30 @@ export const STATUS_LABEL: Record<TruckStatus, string> = {
   detenido: 'Detenido',
   fuera_de_servicio: 'Fuera de servicio',
 }
+
+/** Colección `reports`: reportes ciudadanos / alertas ambientales */
+export type ReportType = 'acumulacion' | 'recoleccion_prioritaria'
+export type ReportStatus = 'abierto' | 'atendido'
+
+export interface Report {
+  id: string
+  type: ReportType
+  description: string
+  location: GeoPoint
+  neighborhoodId: string | null
+  status: ReportStatus
+  createdBy: string
+  createdAt: Timestamp | null
+  attendedBy?: string
+  attendedAt?: Timestamp | null
+}
+
+export const REPORT_LABEL: Record<ReportType, string> = {
+  acumulacion: 'Acumulación de bolsas',
+  recoleccion_prioritaria: 'Recolección prioritaria',
+}
+
+export const REPORT_COLOR: Record<ReportType, string> = {
+  acumulacion: '#ea580c',
+  recoleccion_prioritaria: '#dc2626',
+}

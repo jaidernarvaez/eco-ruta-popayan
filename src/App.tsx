@@ -21,31 +21,33 @@ function Shell() {
   const isDriver = profile.role === 'conductor' || profile.role === 'admin'
 
   return (
-    <div className="flex h-full flex-col bg-eco-50 text-slate-800">
-      <header className="flex flex-wrap items-center justify-between gap-2 bg-eco-700 px-6 py-3 text-white shadow">
+    <div className="flex min-h-full flex-col bg-eco-50 text-slate-800">
+      <header className="sticky top-0 z-[1500] flex flex-wrap items-center justify-between gap-2 bg-eco-700 px-3 py-2 text-white shadow sm:px-6 sm:py-3">
         <div className="flex items-center gap-2">
           <Leaf className="h-7 w-7" />
-          <h1 className="text-xl font-bold">EcoRuta Popayán</h1>
-          <span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-xs">
-            {isDriver ? 'Modo conductor / simulador' : 'Vista ciudadano'}
+          <h1 className="text-lg font-bold sm:text-xl">EcoRuta Popayán</h1>
+          <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">
+            {isDriver ? 'Conductor' : 'Ciudadano'}
           </span>
         </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="hidden sm:inline">{user.email}</span>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="hidden md:inline">{user.email}</span>
           {profile.role !== 'admin' && (
             <button
               onClick={() => chooseRole(isDriver ? 'ciudadano' : 'conductor')}
               className="flex items-center gap-1 rounded-md bg-white/15 px-2 py-1 hover:bg-white/25"
             >
-              <Repeat className="h-4 w-4" /> Cambiar a {isDriver ? 'ciudadano' : 'conductor'}
+              <Repeat className="h-4 w-4" />
+              <span className="hidden sm:inline">Cambiar a</span> {isDriver ? 'ciudadano' : 'conductor'}
             </button>
           )}
           <button onClick={logout} className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-white/15">
-            <LogOut className="h-4 w-4" /> Salir
+            <LogOut className="h-4 w-4" />
+            <span className="hidden sm:inline">Salir</span>
           </button>
         </div>
       </header>
-      <main className="min-h-0 flex-1">{isDriver ? <DriverView /> : <CitizenView />}</main>
+      <main className="flex-1">{isDriver ? <DriverView /> : <CitizenView />}</main>
     </div>
   )
 }
