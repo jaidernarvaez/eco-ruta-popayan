@@ -1,7 +1,7 @@
 rules_version = '2';
 
 // ─────────────────────────────────────────────────────────────
-//  EcoRuta Popayán · Reglas de seguridad de Cloud Firestore
+//  EcoRuta Colombia · Reglas de seguridad de Cloud Firestore
 //  Colecciones: users, trucks, neighborhoods, schedules, reports
 // ─────────────────────────────────────────────────────────────
 service cloud.firestore {
@@ -22,11 +22,21 @@ service cloud.firestore {
 
     function validWasteType(t) { return t in ['ordinario', 'reciclable']; }
 
-    // Coordenadas dentro del área urbana aproximada de Popayán
-    function inPopayan(p) {
+    // Coordenadas dentro del territorio colombiano (continental + San Andrés)
+    function inColombia(p) {
       return p is latlng
-        && p.latitude()  >= 2.38  && p.latitude()  <= 2.50
-        && p.longitude() >= -76.67 && p.longitude() <= -76.55;
+        && p.latitude()  >= -4.3 && p.latitude()  <= 13.6
+        && p.longitude() >= -82.0 && p.longitude() <= -66.8;
+    }
+
+    // Ciudades del catálogo nacional (src/data/cities.ts)
+    function validCity(c) {
+      return c in ['popayan', 'cali', 'bogota', 'medellin', 'barranquilla',
+                   'cartagena', 'bucaramanga', 'pasto'];
+    }
+    // `city` es opcional en documentos antiguos (= Popayán), pero si viene debe ser válida
+    function optionalCity(d) {
+      return !('city' in d) || validCity(d.city);
     }
 
     // ── users/{uid}: perfil y rol ───────────────────────────
@@ -52,13 +62,14 @@ service cloud.firestore {
     // ── trucks/{truckId}: camiones y su posición GPS ────────
     function validTruck(d) {
       return d.keys().hasOnly(['plate', 'wasteType', 'status', 'location', 'driverId',
-                               'driverEmail', 'neighborhoodId', 'updatedAt'])
+                               'driverEmail', 'neighborhoodId', 'updatedAt', 'city'])
         && d.keys().hasAll(['plate', 'wasteType', 'status', 'location', 'driverId', 'updatedAt'])
         && d.plate is string && d.plate.matches('^[A-Z]{3}[0-9]{3}$')
         && validWasteType(d.wasteType)
         && d.status in ['en_ruta', 'detenido', 'fuera_de_servicio']
-        && inPopayan(d.location)
+        && inColombia(d.location)
         && (!('neighborhoodId' in d) || d.neighborhoodId == null || d.neighborhoodId is string)
+        && optionalCity(d)
         && d.updatedAt == request.time;
     }
 
@@ -67,15 +78,17 @@ service cloud.firestore {
 
       allow create: if isDriver()
         && validTruck(request.resource.data)
+        && 'city' in request.resource.data
         && request.resource.data.driverId == request.auth.uid
         && request.resource.data.driverEmail == request.auth.token.email;
 
-      // Un conductor solo mueve SU camión; no puede cambiar placa, tipo ni dueño.
+      // Un conductor solo mueve SU camión (puede cambiarlo de ciudad);
+      // no puede cambiar placa, tipo ni dueño.
       allow update: if isDriver()
         && (resource.data.driverId == request.auth.uid || isAdmin())
         && validTruck(request.resource.data)
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['location', 'status', 'neighborhoodId', 'updatedAt']);
+             .hasOnly(['location', 'status', 'neighborhoodId', 'updatedAt', 'city']);
 
       allow delete: if isAdmin() || (isDriver() && resource.data.driverId == request.auth.uid);
     }
@@ -85,10 +98,11 @@ service cloud.firestore {
       allow read: if true;
       // Conductores pueden CREAR los datos de ejemplo; solo admin modifica o borra.
       allow create: if isDriver()
-        && request.resource.data.keys().hasOnly(['name', 'commune', 'center'])
+        && request.resource.data.keys().hasOnly(['name', 'commune', 'center', 'city'])
+        && optionalCity(request.resource.data)
         && request.resource.data.name is string && request.resource.data.name.size() <= 60
         && request.resource.data.commune is int
-        && inPopayan(request.resource.data.center);
+        && inColombia(request.resource.data.center);
       allow update, delete: if isAdmin();
     }
 
@@ -96,7 +110,8 @@ service cloud.firestore {
     match /schedules/{id} {
       allow read: if true;
       allow create: if isDriver()
-        && request.resource.data.keys().hasOnly(['neighborhoodId', 'wasteType', 'days', 'startTime', 'endTime'])
+        && request.resource.data.keys().hasOnly(['neighborhoodId', 'wasteType', 'days', 'startTime', 'endTime', 'city'])
+        && optionalCity(request.resource.data)
         && exists(/databases/$(database)/documents/neighborhoods/$(request.resource.data.neighborhoodId))
         && validWasteType(request.resource.data.wasteType)
         && request.resource.data.days is list && request.resource.data.days.size() <= 7
@@ -112,14 +127,15 @@ service cloud.firestore {
 
       // Cualquier usuario autenticado con perfil puede crear un reporte a su nombre.
       allow create: if hasProfile()
-        && request.resource.data.keys().hasOnly(['type', 'description', 'location', 'neighborhoodId',
+        && request.resource.data.keys().hasOnly(['type', 'description', 'location', 'city', 'neighborhoodId',
                                                  'status', 'createdBy', 'createdAt'])
-        && request.resource.data.keys().hasAll(['type', 'description', 'location', 'status',
+        && request.resource.data.keys().hasAll(['type', 'description', 'location', 'city', 'status',
                                                 'createdBy', 'createdAt'])
+        && validCity(request.resource.data.city)
         && request.resource.data.type in ['acumulacion', 'recoleccion_prioritaria']
         && request.resource.data.description is string
         && request.resource.data.description.size() <= 280
-        && inPopayan(request.resource.data.location)
+        && inColombia(request.resource.data.location)
         && (!('neighborhoodId' in request.resource.data)
             || request.resource.data.neighborhoodId == null
             || request.resource.data.neighborhoodId is string)

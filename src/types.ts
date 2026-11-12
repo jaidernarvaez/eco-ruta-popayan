@@ -13,6 +13,8 @@ export interface Truck {
   location: GeoPoint
   driverId: string
   driverEmail: string
+  /** ID de la ciudad (ver src/data/cities.ts). Documentos antiguos sin `city` = Popayán. */
+  city?: string
   neighborhoodId: string | null
   updatedAt: Timestamp | null
 }
@@ -23,6 +25,7 @@ export interface Neighborhood {
   name: string
   commune: number
   center: GeoPoint
+  city?: string
 }
 
 /** Colección `schedules` */
@@ -66,6 +69,7 @@ export interface Report {
   type: ReportType
   description: string
   location: GeoPoint
+  city?: string
   neighborhoodId: string | null
   status: ReportStatus
   createdBy: string

@@ -10,13 +10,15 @@ import {
   Truck as TruckIcon,
   X,
 } from 'lucide-react'
-import MapaPopayan from './MapaPopayan'
+import MapaCiudad from './MapaCiudad'
+import CitySelect from './CitySelect'
 import ReportDialog from './ReportDialog'
 import { db } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
-import { useNeighborhoods, useOpenReports, useSchedules, useTrucks } from '../hooks/useFirestoreData'
+import { useCity } from '../context/CityContext'
+import { cityOf, useNeighborhoods, useOpenReports, useSchedules, useTrucks } from '../hooks/useFirestoreData'
 import { timeAgo, useNow } from '../hooks/useNow'
-import { distanceMeters, formatDistance, insidePopayan, nearestNeighborhood } from '../lib/geo'
+import { distanceMeters, formatDistance, insideCity, nearestNeighborhood } from '../lib/geo'
 import { REPORT_LABEL, STATUS_LABEL, WASTE_LABEL, type Truck, type WasteType } from '../types'
 
 type Filter = 'todos' | WasteType
@@ -29,10 +31,15 @@ const STATUS_STYLE: Record<Truck['status'], string> = {
 
 export default function CitizenView() {
   const { user } = useAuth()
-  const { items: trucks, error } = useTrucks()
-  const { items: neighborhoods } = useNeighborhoods()
+  const { city } = useCity()
+  const { items: allTrucks, error } = useTrucks()
+  const { items: neighborhoods } = useNeighborhoods(city.id)
   const { items: schedules } = useSchedules()
-  const { items: reports } = useOpenReports()
+  const { items: allReports } = useOpenReports()
+
+  // Solo camiones y reportes de la ciudad activa
+  const trucks = useMemo(() => allTrucks.filter((t) => cityOf(t) === city.id), [allTrucks, city.id])
+  const reports = useMemo(() => allReports.filter((r) => cityOf(r) === city.id), [allReports, city.id])
   const now = useNow(10000)
 
   const [filter, setFilter] = useState<Filter>('todos')
@@ -70,8 +77,8 @@ export default function CitizenView() {
   const myReports = reports.filter((r) => r.createdBy === user?.uid)
 
   function placeDraft(lat: number, lng: number) {
-    if (!insidePopayan(lat, lng)) {
-      setNotice('Ese punto está fuera del área urbana de Popayán.')
+    if (!insideCity(lat, lng, city)) {
+      setNotice(`Ese punto está fuera del área de ${city.name}.`)
       return
     }
     setNotice(null)
@@ -118,7 +125,15 @@ export default function CitizenView() {
           {chip('ordinario', 'Ordinarios', Trash2)}
           {chip('reciclable', 'Reciclables', Recycle)}
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <CitySelect
+            onChange={() => {
+              setBarrioId(null)
+              setDraft(null)
+              setPicking(false)
+              setNotice(null)
+            }}
+          />
           <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3">
             <MapPin className="h-4 w-4 shrink-0 text-eco-600" />
             <select
@@ -127,10 +142,11 @@ export default function CitizenView() {
               className="w-full bg-transparent py-2 outline-none sm:w-56"
               aria-label="Selecciona tu barrio"
             >
-              <option value="">Selecciona tu barrio…</option>
+              <option value="">Barrio en {city.name}…</option>
               {neighborhoods.map((n) => (
                 <option key={n.id} value={n.id}>
-                  {n.name} · Comuna {n.commune}
+                  {n.name}
+                  {n.commune > 0 ? ` · ${city.zoneLabel} ${n.commune}` : ''}
                 </option>
               ))}
             </select>
@@ -165,7 +181,8 @@ export default function CitizenView() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
         <section className="h-[55vh] min-h-[360px] overflow-hidden rounded-xl shadow lg:h-[calc(100vh-13rem)]">
-          <MapaPopayan
+          <MapaCiudad
+            city={city}
             trucks={visibleTrucks}
             neighborhoods={neighborhoods}
             reports={reports}
@@ -184,12 +201,13 @@ export default function CitizenView() {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-eco-500 opacity-75" />
                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-eco-600" />
               </span>
-              Estado en vivo {barrio && <span className="normal-case text-slate-400">· desde {barrio.name}</span>}
+              Estado en vivo · {city.name}
+              {barrio && <span className="normal-case text-slate-400">· desde {barrio.name}</span>}
             </h2>
             {error && <p className="text-sm text-red-600">{error}</p>}
             {live.length === 0 && (
               <p className="flex items-center gap-2 text-sm text-slate-500">
-                <TruckIcon className="h-4 w-4" /> No hay camiones en servicio ahora.
+                <TruckIcon className="h-4 w-4" /> No hay camiones en servicio en {city.name} ahora.
               </p>
             )}
             <ul className="space-y-2">
@@ -294,6 +312,8 @@ export default function CitizenView() {
       {draft && (
         <ReportDialog
           point={draft}
+          cityId={city.id}
+          cityName={city.name}
           neighborhoodId={draftBarrioId}
           neighborhoodName={neighborhoods.find((n) => n.id === draftBarrioId)?.name ?? null}
           onClose={() => setDraft(null)}

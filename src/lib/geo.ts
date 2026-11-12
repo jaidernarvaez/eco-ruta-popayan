@@ -1,3 +1,5 @@
+import { COLOMBIA_BOUNDS, type City } from '../data/cities'
+
 /** Distancia aproximada en metros entre dos coordenadas (fórmula de Haversine). */
 export function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
   const R = 6371000
@@ -9,12 +11,17 @@ export function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: n
   return 2 * R * Math.asin(Math.sqrt(a))
 }
 
-// Límites aproximados del área urbana de Popayán (iguales a los de firestore.rules)
-export const POPAYAN_BOUNDS = { minLat: 2.38, maxLat: 2.5, minLng: -76.67, maxLng: -76.55 }
-
-export function insidePopayan(lat: number, lng: number) {
-  const b = POPAYAN_BOUNDS
+/** Dentro del territorio colombiano (mismos límites que firestore.rules). */
+export function insideColombia(lat: number, lng: number) {
+  const b = COLOMBIA_BOUNDS
   return lat >= b.minLat && lat <= b.maxLat && lng >= b.minLng && lng <= b.maxLng
+}
+
+/** Radio máximo (m) desde el centro de la ciudad para considerar un punto dentro de ella. */
+export const CITY_RADIUS_M = 25000
+
+export function insideCity(lat: number, lng: number, city: City) {
+  return insideColombia(lat, lng) && distanceMeters(lat, lng, city.lat, city.lng) <= CITY_RADIUS_M
 }
 
 export function formatDistance(meters: number) {

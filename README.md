@@ -1,8 +1,11 @@
-# EcoRuta Popayán 🌿🚛
+# EcoRuta Colombia 🌿🚛
 
 Aplicación web para monitorear en tiempo real los camiones de recolección de residuos
-ordinarios y reciclables en Popayán, Cauca, con el fin de evitar la acumulación de bolsas
-en las calles y prevenir la contaminación ambiental.
+ordinarios y reciclables en las principales ciudades de Colombia, con el fin de evitar la
+acumulación de bolsas en las calles y prevenir la contaminación ambiental.
+Nació como **EcoRuta Popayán** y desde la Etapa 4 tiene cobertura nacional.
+
+🌐 **https://ecoruta-popayan.web.app** · Proyecto Firebase: `ecoruta-popayan`
 
 ## Tecnologías
 - Vite + React + TypeScript
@@ -75,13 +78,31 @@ Novedades:
 Reglas: cualquier usuario autenticado lee y crea reportes a su nombre; solo un conductor los marca
 como atendidos; el autor puede retirar el suyo.
 
+## Etapa 4 — EcoRuta Colombia (cobertura nacional)
+Ejecuta **`etapa4-nacional.bat`**: compila, publica reglas y Hosting, hace commit/push y abre la app.
+
+- **Catálogo de ciudades** (`src/data/cities.ts`): Popayán, Cali, Bogotá, Medellín, Barranquilla,
+  Cartagena, Bucaramanga y Pasto, cada una con coordenadas centrales, zoom y barrios/zonas
+  representativos (coordenadas aproximadas).
+- **Selector de ciudad** en las vistas Ciudadano y Conductor (se recuerda en el navegador). Al
+  cambiar de ciudad el mapa vuela a ella, el selector de barrios muestra solo los de esa ciudad y
+  los camiones y reportes se filtran por la ciudad activa.
+- **Campo `city`** en `trucks`, `reports`, `neighborhoods` y `schedules`. Los documentos creados
+  antes de esta etapa no lo tienen y se tratan como Popayán.
+- **Simulador:** el camión se registra en la ciudad activa; «Iniciar ruta en <ciudad>» lo traslada
+  a esa ciudad si estaba en otra. Rutas demo en Popayán, Cali, Bogotá y Medellín
+  (`DEMO_ROUTES`), botón **Crear camiones demo (4 ciudades)** y **Mover todos mis camiones**
+  (una escritura por camión cada 4 s para cuidar la cuota gratuita de Firestore).
+- **Reglas:** coordenadas dentro de Colombia y `city` limitada al catálogo; obligatoria al crear
+  camiones y reportes.
+
 ## Estructura
 ```
 src/
-├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaPopayan, ReportDialog
-├── context/      AuthContext (sesión + perfil/rol)
+├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaCiudad, CitySelect, ReportDialog
+├── context/      AuthContext (sesión + perfil/rol), CityContext (ciudad activa)
 ├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules, reports), useNow
-├── data/seed.ts  Barrios y horarios de ejemplo
+├── data/         cities.ts (catálogo nacional y rutas demo), seed.ts (barrios y horarios)
 ├── lib/          firebase.ts, magicLink.ts, geo.ts
 └── types.ts
 firestore.rules   Reglas de seguridad

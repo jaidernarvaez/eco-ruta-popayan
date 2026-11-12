@@ -27,9 +27,9 @@ export default function LoginPage({ linkError }: { linkError: string | null }) {
           <div className="rounded-full bg-eco-500/15 p-3">
             <Leaf className="h-8 w-8 text-eco-700" />
           </div>
-          <h1 className="text-2xl font-bold text-eco-900">EcoRuta Popayán</h1>
+          <h1 className="text-2xl font-bold text-eco-900">EcoRuta Colombia</h1>
           <p className="text-sm text-slate-600">
-            Ingresa con tu correo. Te enviaremos un enlace mágico, sin contraseñas.
+            Recolección de residuos en tiempo real en las principales ciudades de Colombia. Ingresa con tu correo: te enviaremos un enlace mágico, sin contraseñas.
           </p>
         </div>
 

@@ -32,7 +32,7 @@ export default function RoleSelect() {
           <button className={card} disabled={saving} onClick={() => pick('ciudadano')}>
             <Users className="h-10 w-10 text-eco-600" />
             <span className="font-semibold">Ciudadano</span>
-            <span className="text-sm text-slate-600">Ver camiones en tiempo real y horarios de mi barrio</span>
+            <span className="text-sm text-slate-600">Ver camiones en tiempo real y horarios de mi barrio y mi ciudad</span>
           </button>
           <button className={card} disabled={saving} onClick={() => pick('conductor')}>
             <Truck className="h-10 w-10 text-eco-600" />

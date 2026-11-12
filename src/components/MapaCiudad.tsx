@@ -1,12 +1,11 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import L from 'leaflet'
 import { Circle, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import { AlertTriangle, MapPinPlus, Recycle, Siren, Trash2 } from 'lucide-react'
 import type { Neighborhood, Report, Truck } from '../types'
 import { REPORT_COLOR, REPORT_LABEL, STATUS_LABEL, WASTE_COLOR, WASTE_LABEL } from '../types'
-
-export const POPAYAN_CENTRO: [number, number] = [2.4419, -76.6063]
+import type { City } from '../data/cities'
 
 function badgeIcon(content: React.ReactNode, color: string, size: number, ring = '2px solid white', square = false) {
   const html = renderToStaticMarkup(
@@ -52,6 +51,20 @@ function FlyTo({ target }: { target: [number, number] | null }) {
   return null
 }
 
+/** Centra el mapa en la ciudad activa cada vez que cambia. */
+function FlyToCity({ city }: { city: City }) {
+  const map = useMap()
+  const first = useRef(true)
+  useEffect(() => {
+    if (first.current) {
+      first.current = false
+      return
+    }
+    map.flyTo([city.lat, city.lng], city.zoom, { duration: 1.2 })
+  }, [map, city.id])
+  return null
+}
+
 function ClickHandler({ onClick, picking }: { onClick?: (lat: number, lng: number) => void; picking: boolean }) {
   const map = useMapEvents({ click: (e) => onClick?.(e.latlng.lat, e.latlng.lng) })
   useEffect(() => {
@@ -61,6 +74,7 @@ function ClickHandler({ onClick, picking }: { onClick?: (lat: number, lng: numbe
 }
 
 interface Props {
+  city: City
   trucks: Truck[]
   neighborhoods: Neighborhood[]
   reports?: Report[]
@@ -73,7 +87,8 @@ interface Props {
   renderReportActions?: (report: Report) => React.ReactNode
 }
 
-export default function MapaPopayan({
+export default function MapaCiudad({
+  city,
   trucks,
   neighborhoods,
   reports = [],
@@ -92,11 +107,12 @@ export default function MapaPopayan({
   )
 
   return (
-    <MapContainer center={POPAYAN_CENTRO} zoom={14} scrollWheelZoom className="h-full w-full">
+    <MapContainer center={[city.lat, city.lng]} zoom={city.zoom} scrollWheelZoom className="h-full w-full">
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <FlyToCity city={city} />
       <FlyTo target={flyTarget} />
       <ClickHandler onClick={onMapClick} picking={picking} />
 
@@ -142,6 +158,7 @@ export default function MapaPopayan({
           <Popup>
             <strong>{t.plate}</strong>
             <br />
+            {city.name} ·{' '}
             {WASTE_LABEL[t.wasteType]} · {STATUS_LABEL[t.status]}
             <br />
             <small>

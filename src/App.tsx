@@ -1,5 +1,6 @@
 import { Leaf, Loader2, LogOut, Repeat } from 'lucide-react'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { CityProvider } from './context/CityContext'
 import LoginPage from './components/LoginPage'
 import RoleSelect from './components/RoleSelect'
 import CitizenView from './components/CitizenView'
@@ -25,7 +26,7 @@ function Shell() {
       <header className="sticky top-0 z-[1500] flex flex-wrap items-center justify-between gap-2 bg-eco-700 px-3 py-2 text-white shadow sm:px-6 sm:py-3">
         <div className="flex items-center gap-2">
           <Leaf className="h-7 w-7" />
-          <h1 className="text-lg font-bold sm:text-xl">EcoRuta Popayán</h1>
+          <h1 className="text-lg font-bold sm:text-xl">EcoRuta Colombia</h1>
           <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">
             {isDriver ? 'Conductor' : 'Ciudadano'}
           </span>
@@ -55,7 +56,9 @@ function Shell() {
 export default function App() {
   return (
     <AuthProvider>
-      <Shell />
+      <CityProvider>
+        <Shell />
+      </CityProvider>
     </AuthProvider>
   )
 }

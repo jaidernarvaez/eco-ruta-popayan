@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, query, where, type QueryConstraint } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { FALLBACK_NEIGHBORHOODS } from '../data/seed'
+import { DEFAULT_CITY_ID, cityOfZone } from '../data/cities'
 import type { Neighborhood, Report, Schedule, Truck } from '../types'
 
 function useCollection<T>(path: string, constraints: QueryConstraint[] = [], key = '') {
@@ -39,17 +40,26 @@ export function useOpenReports() {
   return { items: sorted, error }
 }
 
+/** Ciudad de un documento; los creados antes de la Etapa 4 no tienen `city` y son de Popayán. */
+export const cityOf = (d: { city?: string }) => d.city ?? DEFAULT_CITY_ID
+
 /**
- * Barrios de Firestore + barrios de ejemplo que todavía no se hayan cargado,
- * para que el selector siempre muestre la lista completa.
+ * Barrios de Firestore + barrios del catálogo nacional que todavía no se hayan
+ * cargado, para que el selector siempre muestre la lista completa.
+ * Si se indica `cityId`, devuelve solo los de esa ciudad.
  */
-export function useNeighborhoods() {
+export function useNeighborhoods(cityId?: string) {
   const { items, error } = useCollection<Neighborhood>('neighborhoods')
   const merged = useMemo(() => {
     const ids = new Set(items.map((n) => n.id))
-    return [...items, ...FALLBACK_NEIGHBORHOODS.filter((n) => !ids.has(n.id))].sort((a, b) =>
-      a.name.localeCompare(b.name, 'es'),
-    )
-  }, [items])
-  return { items: merged, stored: items.length, error }
+    const fromDb = items.map((n) => ({ ...n, city: n.city ?? cityOfZone(n.id) ?? DEFAULT_CITY_ID }))
+    return [...fromDb, ...FALLBACK_NEIGHBORHOODS.filter((n) => !ids.has(n.id))]
+      .filter((n) => !cityId || n.city === cityId)
+      .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+  }, [items, cityId])
+  const stored = useMemo(
+    () => items.filter((n) => !cityId || (n.city ?? cityOfZone(n.id)) === cityId).length,
+    [items, cityId],
+  )
+  return { items: merged, stored, error }
 }

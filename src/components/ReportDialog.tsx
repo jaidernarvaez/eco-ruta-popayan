@@ -7,6 +7,8 @@ import { REPORT_LABEL, type ReportType } from '../types'
 
 interface Props {
   point: [number, number]
+  cityId: string
+  cityName: string
   neighborhoodId: string | null
   neighborhoodName: string | null
   onClose: () => void
@@ -15,7 +17,7 @@ interface Props {
 
 const MAX = 280
 
-export default function ReportDialog({ point, neighborhoodId, neighborhoodName, onClose, onSaved }: Props) {
+export default function ReportDialog({ point, cityId, cityName, neighborhoodId, neighborhoodName, onClose, onSaved }: Props) {
   const { user } = useAuth()
   const [type, setType] = useState<ReportType>('acumulacion')
   const [description, setDescription] = useState('')
@@ -32,6 +34,7 @@ export default function ReportDialog({ point, neighborhoodId, neighborhoodName, 
         type,
         description: description.trim(),
         location: new GeoPoint(point[0], point[1]),
+        city: cityId,
         neighborhoodId,
         status: 'abierto',
         createdBy: user.uid,
@@ -69,7 +72,7 @@ export default function ReportDialog({ point, neighborhoodId, neighborhoodName, 
           <div>
             <h2 className="text-lg font-bold text-slate-800">Reporte ciudadano</h2>
             <p className="text-xs text-slate-500">
-              {neighborhoodName ? `Cerca de ${neighborhoodName}` : 'Ubicación marcada en el mapa'} ·{' '}
+              {cityName} · {neighborhoodName ? `cerca de ${neighborhoodName}` : 'ubicación marcada'} ·{' '}
               {point[0].toFixed(4)}, {point[1].toFixed(4)}
             </p>
           </div>
