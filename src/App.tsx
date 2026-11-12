@@ -1,4 +1,4 @@
-import { Leaf, Loader2, LogOut, Repeat } from 'lucide-react'
+import { Leaf, Loader2, LogOut, Repeat, Truck } from 'lucide-react'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { CityProvider } from './context/CityContext'
 import LoginPage from './components/LoginPage'
@@ -7,7 +7,7 @@ import CitizenView from './components/CitizenView'
 import DriverView from './components/DriverView'
 
 function Shell() {
-  const { user, profile, loading, linkError, chooseRole, logout } = useAuth()
+  const { user, profile, isAnonymous, loading, chooseRole, logout } = useAuth()
 
   if (loading) {
     return (
@@ -16,7 +16,7 @@ function Shell() {
       </div>
     )
   }
-  if (!user) return <LoginPage linkError={linkError} />
+  if (!user) return <LoginPage />
   if (!profile) return <RoleSelect />
 
   const isDriver = profile.role === 'conductor' || profile.role === 'admin'
@@ -28,12 +28,21 @@ function Shell() {
           <Leaf className="h-7 w-7" />
           <h1 className="text-lg font-bold sm:text-xl">EcoRuta Colombia</h1>
           <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">
-            {isDriver ? 'Conductor' : 'Ciudadano'}
+            {isDriver ? 'Conductor' : isAnonymous ? 'Ciudadano · acceso rápido' : 'Ciudadano'}
           </span>
         </div>
         <div className="flex items-center gap-2 text-sm">
-          <span className="hidden md:inline">{user.email}</span>
-          {profile.role !== 'admin' && (
+          {user.email && <span className="hidden md:inline">{user.email}</span>}
+          {isAnonymous ? (
+            <button
+              onClick={logout}
+              title="Cierra el acceso rápido y vuelve a la pantalla de ingreso de conductores"
+              className="flex items-center gap-1 rounded-md bg-white/15 px-2 py-1 hover:bg-white/25"
+            >
+              <Truck className="h-4 w-4" />
+              <span className="hidden sm:inline">Soy</span> conductor
+            </button>
+          ) : profile.role !== 'admin' && (
             <button
               onClick={() => chooseRole(isDriver ? 'ciudadano' : 'conductor')}
               className="flex items-center gap-1 rounded-md bg-white/15 px-2 py-1 hover:bg-white/25"

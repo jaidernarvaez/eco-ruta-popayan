@@ -33,7 +33,7 @@ npm run build    # compilación de producción
 Ejecuta **`etapa2-firestore-auth.bat`**: compila, publica `firestore.rules`, hace commit/push y abre la app.
 
 Requisitos (una sola vez, en la consola de Firebase):
-- Authentication → Correo electrónico/contraseña con **Vínculo de correo electrónico** activado.
+- ~~Authentication → Vínculo de correo electrónico~~ (reemplazado en la Etapa 4, ver abajo).
 - Firestore Database creada.
 
 ### Modelo de datos (Cloud Firestore)
@@ -96,6 +96,22 @@ Ejecuta **`etapa4-nacional.bat`**: compila, publica reglas y Hosting, hace commi
 - **Reglas:** coordenadas dentro de Colombia y `city` limitada al catálogo; obligatoria al crear
   camiones y reportes.
 
+### Acceso sin cuota diaria de correos
+El Enlace Mágico se eliminó porque dependía del límite diario de correos de Firebase. Ahora:
+
+| Quién | Método | Detalle |
+|---|---|---|
+| Ciudadano | **Acceso rápido** (`signInAnonymously`) | Entra directo al mapa, sin correo. Puede ver camiones y crear reportes. |
+| Conductor / operador | **Google** (`signInWithPopup`) | Luego elige su rol (ciudadano o conductor). |
+| Conductor / operador | **Correo y contraseña** | Ingresar o crear cuenta; solo se envía correo si pide recuperar la contraseña. |
+
+Requisito en la consola de Firebase → Authentication → Método de acceso: habilitar
+**Anónimo**, **Google** y **Correo electrónico/contraseña**.
+
+Reglas: cualquier usuario autenticado (`request.auth != null`, incluidos los anónimos) lee
+camiones y reportes y crea reportes a su nombre. Los anónimos no pueden crear perfil, así que
+nunca pueden actuar como conductores.
+
 ## Estructura
 ```
 src/
@@ -103,7 +119,7 @@ src/
 ├── context/      AuthContext (sesión + perfil/rol), CityContext (ciudad activa)
 ├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules, reports), useNow
 ├── data/         cities.ts (catálogo nacional y rutas demo), seed.ts (barrios y horarios)
-├── lib/          firebase.ts, magicLink.ts, geo.ts
+├── lib/          firebase.ts, authMethods.ts, geo.ts
 └── types.ts
 firestore.rules   Reglas de seguridad
 firebase.json     Reglas + Firebase Hosting (carpeta dist, SPA)
