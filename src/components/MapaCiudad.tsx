@@ -94,6 +94,8 @@ interface Props {
   draftPoint?: [number, number] | null
   /** Trazado del camión: línea desde su posición por las paradas numeradas. */
   plannedRoute?: { from: [number, number] | null; stops: [number, number][]; editing: boolean } | null
+  /** En modo edición, clic sobre una parada numerada para quitarla. */
+  onStopClick?: (index: number) => void
   /** Ubicación GPS del ciudadano (punto azul). */
   userPoint?: [number, number] | null
   focus?: [number, number] | null
@@ -112,6 +114,7 @@ export default function MapaCiudad({
   draftPoint,
   userPoint = null,
   plannedRoute = null,
+  onStopClick,
   focus = null,
   picking = false,
   onMapClick,
@@ -160,8 +163,14 @@ export default function MapaCiudad({
             }}
           />
           {plannedRoute.stops.map((p, i) => (
-            <Marker key={`stop-${i}`} position={p} icon={stopIcon(i + 1, plannedRoute.editing)} zIndexOffset={500}>
-              <Tooltip>Parada {i + 1}</Tooltip>
+            <Marker
+              key={`stop-${i}-${p[0]}-${p[1]}`}
+              position={p}
+              icon={stopIcon(i + 1, plannedRoute.editing)}
+              zIndexOffset={1500}
+              eventHandlers={plannedRoute.editing && onStopClick ? { click: () => onStopClick(i) } : undefined}
+            >
+              <Tooltip>{plannedRoute.editing ? `Parada ${i + 1} · clic para quitarla` : `Parada ${i + 1}`}</Tooltip>
             </Marker>
           ))}
         </>

@@ -153,16 +153,39 @@ Ejecuta **`etapa6-rutas-conductor.bat`**: compila, publica reglas y Hosting, hac
   30 s si está quieto), detecta la ciudad del catálogo más cercana y permite desvíos libres.
   Requiere permiso de ubicación y HTTPS (Firebase Hosting ya lo tiene).
 
+## Etapa 7 — Administrador vs. Conductor y gestión de flota
+Ejecuta **`etapa7-admin-flota.bat`**: pide el correo del administrador (la primera vez), compila,
+publica reglas y Hosting, hace commit/push y abre la app.
+
+| Rol | Quién | Puede |
+|---|---|---|
+| **Administrador** | Cuenta con el correo configurado **y verificado** (Google siempre lo está), o `role == 'admin'` en `users/{uid}` | Todo lo del conductor + **registrar**, **eliminar** y **crear camiones demo**; mover toda la flota |
+| **Conductor** | Cualquier cuenta no anónima (Google o correo/contraseña) | Operar **cualquier camión** de la ciudad: moverlo, iniciar/detener ruta, GPS real, editar/optimizar trazado y atender reportes |
+| **Ciudadano** | Acceso rápido anónimo | Ver camiones, horarios y reportes; crear reportes |
+
+- El correo del administrador vive en **`src/config/admin.ts`** y en **`firestore.rules`**
+  (`isAdminEmail`). Para cambiarlo: `node scripts/set-admin-email.mjs nuevo@correo.com`.
+- Se exige correo **verificado** para evitar que alguien cree una cuenta de correo/contraseña con el
+  correo del administrador antes que él.
+- El rol ya no se elige: se asigna solo. Conductores y admin pueden usar «Ver como ciudadano».
+- Reglas de `trucks`: `read` cualquier autenticado; `create`/`delete` solo administrador; `update`
+  administrador o conductor no anónimo, limitado a posición, estado, ciudad, barrio y trazado.
+- **Editar ruta en el mapa:** clic en el mapa agrega una parada; clic sobre una parada numerada la
+  quita. **Optimizar ruta con reportes activos** une las paradas actuales con los reportes
+  `pendiente`/`en_ruta` de la ciudad (sin duplicar los que ya están a menos de 30 m) y las ordena.
+
 ## Estructura
 ```
 src/
-├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaCiudad, CitySelect, ReportDialog,
+├── components/   LoginPage, CitizenView, DriverView, MapaCiudad, CitySelect, ReportDialog,
 │                 ProximityBanner, ScheduleCard, ReportsStatusPanel, RoutePlanner
-├── context/      AuthContext (sesión + perfil/rol), CityContext (ciudad activa)
+├── config/       admin.ts (correo del administrador)
+├── context/      AuthContext (sesión y rol efectivo), CityContext (ciudad activa)
 ├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules, reports), useNow
 ├── data/         cities.ts (catálogo nacional y rutas demo), schedules.ts (horarios por barrio), seed.ts
 ├── lib/          firebase.ts, authMethods.ts, geo.ts (Haversine, ETA y optimización de rutas), chime.ts (Web Audio)
 └── types.ts
 firestore.rules   Reglas de seguridad
+scripts/          set-admin-email.mjs
 firebase.json     Reglas + Firebase Hosting (carpeta dist, SPA)
 ```

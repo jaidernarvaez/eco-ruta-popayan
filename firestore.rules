@@ -23,8 +23,21 @@ service cloud.firestore {
     function hasProfile() {
       return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
-    function isAdmin()  { return hasProfile() && role() == 'admin'; }
-    function isDriver() { return hasProfile() && role() in ['conductor', 'admin']; }
+    // ADMINISTRADOR: correo configurado (verificado) o role == 'admin' en users/{uid}.
+    // El correo se escribe con: node scripts/set-admin-email.mjs tu_correo@gmail.com
+    function isAdminEmail() {
+      return signedIn()
+        && request.auth.token.get('email_verified', false) == true
+        && request.auth.token.get('email', '').lower() == 'jaidernarvaez@unicomfacauca.edu.co';
+    }
+    function isAdmin() {
+      return isAdminEmail() || (hasProfile() && role() == 'admin');
+    }
+    // CONDUCTOR: cualquier cuenta autenticada que no sea anónima (Google o correo/contraseña).
+    // El administrador también puede operar.
+    function isDriver() {
+      return signedIn() && !isAnonymous();
+    }
 
     function validWasteType(t) { return t in ['ordinario', 'reciclable']; }
 
@@ -87,22 +100,23 @@ service cloud.firestore {
     match /trucks/{truckId} {
       allow read: if signedIn();
 
-      allow create: if isDriver()
+      // Solo el ADMINISTRADOR registra camiones (driverId/driverEmail = quien lo registró).
+      allow create: if isAdmin()
         && validTruck(request.resource.data)
         && 'city' in request.resource.data
         && request.resource.data.driverId == request.auth.uid
         && request.resource.data.driverEmail == request.auth.token.email;
 
-      // Un conductor solo mueve SU camión (puede cambiarlo de ciudad);
-      // no puede cambiar placa, tipo ni dueño.
+      // Administrador o cualquier conductor (no anónimo) puede OPERAR cualquier camión:
+      // posición, estado, ciudad, barrio y trazado. Nadie cambia placa, tipo ni registro.
       allow update: if isDriver()
-        && (resource.data.driverId == request.auth.uid || isAdmin())
         && validTruck(request.resource.data)
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['location', 'status', 'neighborhoodId', 'updatedAt', 'city',
                      'route', 'routeUpdatedAt']);
 
-      allow delete: if isAdmin() || (isDriver() && resource.data.driverId == request.auth.uid);
+      // Solo el ADMINISTRADOR elimina camiones.
+      allow delete: if isAdmin();
     }
 
     // ── neighborhoods/{id}: barrios (información pública) ───

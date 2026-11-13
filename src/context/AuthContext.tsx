@@ -1,23 +1,32 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
-import { doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore'
+import { doc, onSnapshot } from 'firebase/firestore'
 import { auth, db } from '../lib/firebase'
+import { ADMIN_EMAIL } from '../config/admin'
 import type { Role, UserProfile } from '../types'
 
 interface AuthState {
   user: User | null
-  profile: UserProfile | null
-  /** Ciudadano con acceso rápido (inicio de sesión anónimo). */
+  /**
+   * Rol efectivo:
+   *  - ciudadano: acceso rápido anónimo
+   *  - admin: correo de administrador verificado, o role == 'admin' en users/{uid}
+   *  - conductor: cualquier otra cuenta (Google o correo/contraseña)
+   */
+  role: Role | null
+  isAdmin: boolean
   isAnonymous: boolean
   loading: boolean
-  chooseRole: (role: Exclude<Role, 'admin'>) => Promise<void>
   logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthState | null>(null)
 
-/** Perfil implícito de los ciudadanos anónimos: no se guarda en Firestore. */
-const ANONYMOUS_PROFILE: UserProfile = { email: '', role: 'ciudadano' }
+export function isAdminUser(user: User | null, profile: UserProfile | null) {
+  if (!user || user.isAnonymous) return false
+  const byEmail = user.emailVerified && (user.email ?? '').toLowerCase() === ADMIN_EMAIL
+  return byEmail || profile?.role === 'admin'
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -29,14 +38,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () =>
       onAuthStateChanged(auth, (u) => {
         setUser(u)
-        setProfile(u?.isAnonymous ? ANONYMOUS_PROFILE : null)
+        setProfile(null)
         setProfileReady(!u || u.isAnonymous)
         setAuthReady(true)
       }),
     [],
   )
 
-  // Conductores / operadores: el rol vive en users/{uid}
+  // users/{uid} solo se usa para detectar role == 'admin' asignado desde la consola
   useEffect(() => {
     if (!user || user.isAnonymous) return
     return onSnapshot(
@@ -49,24 +58,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     )
   }, [user])
 
-  async function chooseRole(role: Exclude<Role, 'admin'>) {
-    if (!user || user.isAnonymous) return
-    const ref = doc(db, 'users', user.uid)
-    if (profile) {
-      await updateDoc(ref, { role })
-    } else {
-      await setDoc(ref, { email: user.email, role, createdAt: serverTimestamp() })
-    }
-  }
+  const isAnonymous = !!user?.isAnonymous
+  const isAdmin = isAdminUser(user, profile)
+  const role: Role | null = !user ? null : isAnonymous ? 'ciudadano' : isAdmin ? 'admin' : 'conductor'
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        profile,
-        isAnonymous: !!user?.isAnonymous,
+        role,
+        isAdmin,
+        isAnonymous,
         loading: !authReady || !profileReady,
-        chooseRole,
         logout: () => signOut(auth),
       }}
     >

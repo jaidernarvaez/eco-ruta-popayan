@@ -23,6 +23,7 @@ import {
   Truck as TruckIcon,
   Zap,
   Satellite,
+  ShieldCheck,
 } from 'lucide-react'
 import RoutePlanner from './RoutePlanner'
 import MapaCiudad from './MapaCiudad'
@@ -56,7 +57,7 @@ function stepAlong(pos: [number, number], route: [number, number][], waypoint: n
 }
 
 export default function DriverView() {
-  const { user } = useAuth()
+  const { user, isAdmin } = useAuth()
   const { city, setCityId } = useCity()
   const { items: allTrucks, error } = useTrucks()
   const { items: neighborhoods, stored } = useNeighborhoods(city.id)
@@ -71,10 +72,10 @@ export default function DriverView() {
     [allReports, city.id],
   )
 
-  // Mis camiones en todas las ciudades
-  const myTrucks = useMemo(() => allTrucks.filter((t) => t.driverId === user?.uid), [allTrucks, user])
+  // Flota compartida: cualquier conductor puede operar cualquier camión de la ciudad activa
+  const fleet = trucks
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const myTruck = myTrucks.find((t) => t.id === selectedId) ?? myTrucks.find((t) => cityOf(t) === city.id) ?? myTrucks[0] ?? null
+  const myTruck = fleet.find((t) => t.id === selectedId) ?? fleet[0] ?? null
 
   const [plate, setPlate] = useState('')
   const [wasteType, setWasteType] = useState<WasteType>('ordinario')
@@ -122,8 +123,8 @@ export default function DriverView() {
   function onCityChange(cityId: string) {
     setSimulating(false)
     setFocus(null)
-    const mine = myTrucks.find((t) => cityOf(t) === cityId)
-    setSelectedId(mine?.id ?? null)
+    setSelectedId(allTrucks.find((t) => cityOf(t) === cityId)?.id ?? null)
+    setEditing(false)
     waypointRef.current = 0
   }
 
@@ -198,11 +199,14 @@ export default function DriverView() {
     return () => window.clearInterval(id)
   }, [simulating, myTruck?.id, route, customRoute])
 
-  // Recorrido simultáneo de todos mis camiones, cada uno en la ruta demo de su ciudad
+  const allTrucksRef = useRef(allTrucks)
+  allTrucksRef.current = allTrucks
+
+  // Recorrido simultáneo de toda la flota (solo administrador), cada uno en la ruta demo de su ciudad
   useEffect(() => {
     if (!simulatingAll) return
     const id = window.setInterval(() => {
-      for (const t of myTrucks) {
+      for (const t of allTrucksRef.current) {
         const tCity = cityOf(t)
         const tRoute = routeFor(tCity)
         if (tRoute.length < 2) continue
@@ -221,7 +225,7 @@ export default function DriverView() {
       setLastWrite(new Date().toLocaleTimeString('es-CO'))
     }, TICK_ALL_MS)
     return () => window.clearInterval(id)
-  }, [simulatingAll, myTrucks.length])
+  }, [simulatingAll])
 
   async function toggleSimulation() {
     if (simulating) {
@@ -377,11 +381,16 @@ export default function DriverView() {
       setMessage(`El camión ${myTruck.plate} está en otra ciudad. Inicia su ruta en ${city.name} primero.`)
       return
     }
-    const targets = reports.slice(0, MAX_STOPS).map((r) => [r.location.latitude, r.location.longitude] as LatLng)
-    if (targets.length === 0) {
-      setMessage(`No hay reportes pendientes o en ruta en ${city.name} para optimizar.`)
+    // Paradas actuales del trazado + reportes pendientes/en ruta que aún no estén en él (a menos de 30 m)
+    const reportPoints = reports.map((r) => [r.location.latitude, r.location.longitude] as LatLng)
+    const newOnes = reportPoints.filter(
+      (rp) => !draftStops.some((sp) => distanceMeters(sp[0], sp[1], rp[0], rp[1]) < 30),
+    )
+    if (reportPoints.length === 0) {
+      setMessage(`No hay reportes pendientes o en ruta en ${city.name} para incluir.`)
       return
     }
+    const targets = [...draftStops, ...newOnes].slice(0, MAX_STOPS)
     setBusy(true)
     // Se cede el hilo para que la interfaz muestre "Procesando…" antes del cálculo
     await new Promise((r) => setTimeout(r, 30))
@@ -391,8 +400,8 @@ export default function DriverView() {
     await saveRoute(result.stops)
     const saved = result.beforeMeters - result.afterMeters
     setMessage(
-      `Ruta optimizada con ${result.stops.length} reporte(s): ${(result.afterMeters / 1000).toFixed(2)} km` +
-        (saved > 1 ? ` (ahorra ${(saved / 1000).toFixed(2)} km frente al orden de llegada).` : '.'),
+      `Ruta optimizada: ${result.stops.length} paradas (${newOnes.length} reporte(s) nuevo(s) incluidos), ${(result.afterMeters / 1000).toFixed(2)} km` +
+        (saved > 1 ? ` (ahorra ${(saved / 1000).toFixed(2)} km frente al orden anterior).` : '.'),
     )
   }
 
@@ -425,12 +434,17 @@ export default function DriverView() {
   }
 
   async function createTruck() {
+    if (!isAdmin) return
     const cleanPlate = plate.trim().toUpperCase()
     if (!/^[A-Z]{3}[0-9]{3}$/.test(cleanPlate)) {
       setMessage('La placa debe tener el formato ABC123.')
       return
     }
     try {
+      if (allTrucks.some((t) => t.plate === cleanPlate)) {
+        setMessage(`Ya existe un camión con la placa ${cleanPlate}.`)
+        return
+      }
       const ref = await createTruckDoc(cleanPlate, wasteType, city.id)
       setSelectedId(ref.id)
       setPlate('')
@@ -441,15 +455,16 @@ export default function DriverView() {
   }
 
   async function createDemoTrucks() {
+    if (!isAdmin) return
     setBusy(true)
     try {
-      const existing = new Set(myTrucks.map((t) => t.plate))
+      const existing = new Set(allTrucks.map((t) => t.plate))
       const missing = DEMO_TRUCKS.filter((d) => !existing.has(d.plate))
       await Promise.all(missing.map((d) => createTruckDoc(d.plate, d.wasteType, d.city)))
       setMessage(
         missing.length
           ? `Se crearon ${missing.length} camiones demo: ${missing.map((d) => `${d.plate} (${getCity(d.city).name})`).join(', ')}.`
-          : 'Ya tienes los camiones demo de Popayán, Cali, Bogotá y Medellín.',
+          : 'Los camiones demo de Popayán, Cali, Bogotá y Medellín ya existen.',
       )
     } catch (e) {
       fail(e)
@@ -477,7 +492,7 @@ export default function DriverView() {
   }
 
   async function removeTruck() {
-    if (!myTruck || !confirm(`¿Eliminar el camión ${myTruck.plate}?`)) return
+    if (!isAdmin || !myTruck || !confirm(`¿Eliminar el camión ${myTruck.plate}?`)) return
     setSimulating(false)
     await deleteDoc(doc(db, 'trucks', myTruck.id)).catch(fail)
     setSelectedId(null)
@@ -525,41 +540,46 @@ export default function DriverView() {
             {trucks.length} camión(es) y {reports.length} reporte(s) abiertos en {city.name}
           </p>
         </div>
-        <button
-          onClick={createDemoTrucks}
-          disabled={busy}
-          className={`${btn} border-2 border-eco-600 text-eco-700 hover:bg-eco-50 disabled:opacity-60`}
-        >
-          <TruckIcon className="h-4 w-4" /> Crear camiones demo (4 ciudades)
-        </button>
+        {isAdmin && (
+          <button
+            onClick={createDemoTrucks}
+            disabled={busy}
+            className={`${btn} border-2 border-eco-600 text-eco-700 hover:bg-eco-50 disabled:opacity-60`}
+          >
+            <TruckIcon className="h-4 w-4" /> Crear camiones demo (4 ciudades)
+          </button>
+        )}
       </section>
 
       {/* Panel de controles: altura automática, sin scroll interno */}
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {/* 1. Mis camiones y datos */}
+        {/* 1. Flota de la ciudad */}
         <div className={card}>
           <h2 className={cardTitle}>
-            <TruckIcon className="h-4 w-4" /> Mis camiones ({myTrucks.length})
+            <TruckIcon className="h-4 w-4" /> Camiones de {city.name} ({fleet.length})
           </h2>
-          {myTrucks.length > 0 ? (
+          {fleet.length > 0 ? (
             <select
               value={myTruck?.id ?? ''}
               onChange={(e) => {
                 setSimulating(false)
                 setSelectedId(e.target.value)
-                const t = myTrucks.find((x) => x.id === e.target.value)
-                if (t && cityOf(t) !== city.id) setCityId(cityOf(t))
+                setEditing(false)
               }}
               className="w-full rounded-lg border border-slate-300 px-3 py-2"
             >
-              {myTrucks.map((t) => (
+              {fleet.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.plate} · {getCity(cityOf(t)).name} · {t.wasteType}
+                  {t.plate} · {t.wasteType} · {STATUS_LABEL[t.status]}
                 </option>
               ))}
             </select>
           ) : (
-            <p className="text-sm text-slate-500">Aún no tienes camiones. Registra uno o crea los camiones demo.</p>
+            <p className="text-sm text-slate-500">
+              {isAdmin
+                ? `No hay camiones en ${city.name}. Registra uno o crea los camiones demo.`
+                : `No hay camiones en ${city.name}. Pide al administrador que registre la flota.`}
+            </p>
           )}
           <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
             Barrios de {city.name} en la base: <strong>{stored}</strong> / {city.zones.length}
@@ -576,7 +596,8 @@ export default function DriverView() {
           </button>
         </div>
 
-        {/* 2. Registrar camión */}
+        {/* 2. Registrar camión (solo administrador) */}
+        {isAdmin ? (
         <div className={card}>
           <h2 className={cardTitle}>
             <Plus className="h-4 w-4" /> Registrar camión
@@ -603,6 +624,20 @@ export default function DriverView() {
             <Plus className="h-4 w-4" /> Registrar en {city.name}
           </button>
         </div>
+        ) : (
+          <div className={card}>
+            <h2 className={cardTitle}>
+              <ShieldCheck className="h-4 w-4" /> Gestión de flota
+            </h2>
+            <p className="text-sm text-slate-600">
+              Como <strong>conductor</strong> puedes operar cualquier camión de {city.name}: moverlo, iniciar o detener
+              su ruta, usar tu GPS real, ajustar el trazado y atender reportes.
+            </p>
+            <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
+              Registrar, eliminar o crear camiones demo es exclusivo del administrador.
+            </p>
+          </div>
+        )}
 
         {/* 3. Simulador */}
         <div className={card}>
@@ -638,20 +673,22 @@ export default function DriverView() {
                     ? `Recorrer mi trazado (${customRoute.length} paradas)`
                     : `Iniciar ruta demo en ${city.name}`}
               </button>
+              {isAdmin && (
               <button
                 onClick={() => {
                   setSimulating(false)
                   allStateRef.current = {}
                   setSimulatingAll((v) => !v)
                 }}
-                disabled={myTrucks.length < 2}
+                disabled={allTrucks.length < 2}
                 className={`${btn} w-full py-1.5 disabled:opacity-50 ${
                   simulatingAll ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
               >
                 <Zap className="h-4 w-4" />
-                {simulatingAll ? 'Detener todos' : 'Mover todos mis camiones'}
+                {simulatingAll ? 'Detener toda la flota' : 'Mover toda la flota (todas las ciudades)'}
               </button>
+              )}
               <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm">
                 <span className="flex items-center gap-2 font-medium">
                   <Satellite className={`h-4 w-4 ${gpsOn ? 'animate-pulse text-blue-600' : 'text-slate-500'}`} />
@@ -682,12 +719,14 @@ export default function DriverView() {
                 </span>
                 <span className="col-span-2">última escritura: {lastWrite ?? '—'}</span>
               </div>
-              <button onClick={removeTruck} className={`${btn} w-full py-1.5 text-red-600 hover:bg-red-50`}>
-                <Trash className="h-4 w-4" /> Eliminar camión
-              </button>
+              {isAdmin && (
+                <button onClick={removeTruck} className={`${btn} w-full py-1.5 text-red-600 hover:bg-red-50`}>
+                  <Trash className="h-4 w-4" /> Eliminar camión
+                </button>
+              )}
             </>
           ) : (
-            <p className="text-sm text-slate-500">Registra o selecciona un camión para activar el simulador.</p>
+            <p className="text-sm text-slate-500">Selecciona un camión de la ciudad para activar el simulador.</p>
           )}
         </div>
 
@@ -799,6 +838,7 @@ export default function DriverView() {
               ? { from: [myTruck.location.latitude, myTruck.location.longitude], stops: draftStops, editing }
               : null
           }
+          onStopClick={(i) => setDraftStops((prev) => prev.filter((_, k) => k !== i))}
           onMapClick={(lat, lng) => {
             if (editing) {
               addStop(lat, lng)

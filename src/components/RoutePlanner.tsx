@@ -61,7 +61,7 @@ export default function RoutePlanner(p: Props) {
               </div>
               <p className="text-xs text-slate-500">
                 {p.editing
-                  ? 'Modo edición activo: haz clic en el mapa para agregar paradas en orden.'
+                  ? 'Modo edición activo: clic en el mapa para agregar una parada; clic sobre una parada numerada para quitarla.'
                   : p.dirty
                     ? 'Hay cambios sin guardar.'
                     : p.savedCount > 0
@@ -81,7 +81,7 @@ export default function RoutePlanner(p: Props) {
               }`}
             >
               <PenLine className="h-4 w-4" />
-              {p.editing ? 'Terminar edición' : 'Editar trazado en el mapa'}
+              {p.editing ? 'Terminar edición' : 'Editar ruta en el mapa'}
             </button>
             <button onClick={p.onUndo} disabled={p.stops.length === 0} className={`${btn} bg-slate-100 text-slate-700 hover:bg-slate-200`}>
               <Undo2 className="h-4 w-4" /> Deshacer último punto
@@ -113,7 +113,7 @@ export default function RoutePlanner(p: Props) {
               onClick={p.onOptimizeReports}
               disabled={p.busy || p.openReports === 0}
               className={`${btn} col-span-2 bg-orange-600 text-white hover:bg-orange-700`}
-              title="Vecino más cercano + mejora 2-opt desde la posición actual del camión"
+              title="Une las paradas actuales con los reportes pendientes y en ruta, y las ordena (vecino más cercano + 2-opt)"
             >
               <Sparkles className="h-4 w-4" />
               {p.busy ? 'Calculando…' : `Optimizar ruta con reportes activos (${p.openReports})`}
