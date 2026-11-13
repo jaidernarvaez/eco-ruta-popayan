@@ -27,6 +27,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import RoutePlanner from './RoutePlanner'
+import AsgPanel from './AsgPanel'
 import MapaCiudad from './MapaCiudad'
 import CitySelect from './CitySelect'
 import { db } from '../lib/firebase'
@@ -1013,6 +1014,9 @@ export default function DriverView() {
       {(message || error) && (
         <p className="rounded-lg bg-white p-3 text-sm text-slate-700 shadow">{error ?? message}</p>
       )}
+
+      {/* Indicadores ASG y viabilidad financiera de la ciudad (calculados en el cliente) */}
+      <AsgPanel city={city} trucks={trucks} />
 
       <section className="h-[60vh] min-h-[380px] overflow-hidden rounded-xl shadow">
         <MapaCiudad

@@ -211,16 +211,43 @@ Ejecuta **`etapa8-rutas-por-calles.bat`**.
 - **Nota:** el servidor público de OSRM es de demostración (sin garantía de servicio). Para uso
   intensivo en producción conviene un servidor OSRM propio.
 
+## Etapa 9 — Innovación financiera con enfoque ASG
+Ejecuta **`etapa9-finanzas-asg.bat`** (publica solo Hosting: las reglas de seguridad no cambian).
+Todos los cálculos se hacen en el cliente sobre los datos en tiempo real de Firestore; los
+parámetros están documentados en **`src/config/finanzas.ts`**.
+
+**Billetera Verde (vista Ciudadano · `GreenWallet`)**
+- **500 EcoPuntos = $2.500 COP** por cada reporte propio verificado y recolectado (`status = 'atendido'`).
+- Simulador de canje hacia **Nequi**, **Daviplata** o **abono a factura de aseo**, con validación de
+  celular colombiano y **comprobante visual simulado** (referencia, fecha, destino enmascarado), con
+  marca de agua «sin valor monetario». No se mueve dinero real ni hay conexión con esas entidades;
+  los canjes se guardan en el navegador (`localStorage`).
+
+**Indicadores ASG y viabilidad financiera (panel de operación · `AsgPanel`)**
+
+| Indicador | Cálculo |
+|---|---|
+| Ahorro en combustible (COP) | km optimizados × $4.200 COP/km |
+| Emisiones evitadas (kg CO₂e · GRI 305-5) | km optimizados × 0,12 gal/km × 10,2765 kg CO₂/gal (UPME – FECOC, diésel B10) |
+| Efectividad y trazabilidad (GRI 306) | reportes atendidos ÷ recibidos en 30 días |
+| Insignia «Elegible para Financiación Verde / Bonos Verdes» | efectividad > 70 % |
+
+*Km optimizados* = escenario base reactivo (un viaje de ida y vuelta desde la base por cada parada)
+− recorrido consolidado de EcoRuta (base → paradas optimizadas → base), ambos con factor de rodeo
+vial 1,3. El consumo de 0,12 gal/km, el factor de rodeo y los $4.200/km son **supuestos** a reemplazar
+por datos reales del operador. Los indicadores son referenciales: la emisión de bonos verdes requiere
+verificación independiente y alineación con la Taxonomía Verde de Colombia.
+
 ## Estructura
 ```
 src/
 ├── components/   LoginPage, CitizenView, DriverView, MapaCiudad, CitySelect, ReportDialog,
-│                 ProximityBanner, ScheduleCard, ReportsStatusPanel, RoutePlanner
-├── config/       admin.ts (correo del administrador)
+│                 ProximityBanner, ScheduleCard, ReportsStatusPanel, RoutePlanner, GreenWallet, AsgPanel
+├── config/       admin.ts (correo del administrador), finanzas.ts (parámetros fintech y ASG)
 ├── context/      AuthContext (sesión y rol efectivo), CityContext (ciudad activa)
 ├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules, reports), useNow
 ├── data/         cities.ts (catálogo nacional y rutas demo), schedules.ts (horarios por barrio), seed.ts
-├── lib/          firebase.ts, authMethods.ts, geo.ts (Haversine, ETA y optimización de rutas), chime.ts (Web Audio)
+├── lib/          firebase.ts, authMethods.ts, asg.ts, wallet.ts, geo.ts (Haversine, ETA y optimización de rutas), chime.ts (Web Audio)
 └── types.ts
 firestore.rules   Reglas de seguridad
 scripts/          set-admin-email.mjs

@@ -70,3 +70,10 @@ export function useNeighborhoods(cityId?: string) {
   )
   return { items: merged, stored, error }
 }
+
+/** Todos los reportes creados por un usuario (para la Billetera Verde). Igualdad simple: sin índice compuesto. */
+export function useMyReports(uid: string | undefined) {
+  const id = uid ?? '__sin_sesion__'
+  const constraints = useMemo(() => [where('createdBy', '==', id)], [id])
+  return useCollection<Report>('reports', constraints, `mios-${id}`)
+}

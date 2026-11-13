@@ -6,6 +6,7 @@ import ReportDialog from './ReportDialog'
 import ProximityBanner from './ProximityBanner'
 import ScheduleCard from './ScheduleCard'
 import ReportsStatusPanel from './ReportsStatusPanel'
+import GreenWallet from './GreenWallet'
 import { useAuth } from '../context/AuthContext'
 import { useCity } from '../context/CityContext'
 import { cityOf, useNeighborhoods, useRecentReports, useTrucks } from '../hooks/useFirestoreData'
@@ -32,7 +33,7 @@ const STATUS_STYLE: Record<Truck['status'], string> = {
 }
 
 export default function CitizenView() {
-  const { user } = useAuth()
+  const { user, isAnonymous } = useAuth()
   const { city } = useCity()
   const { items: allTrucks, error } = useTrucks()
   const { items: neighborhoods } = useNeighborhoods(city.id)
@@ -318,6 +319,9 @@ export default function CitizenView() {
             zoneId={barrioId}
             onFocus={setFocus}
           />
+
+          {/* Billetera Verde: EcoPuntos por reportes recolectados (canje simulado) */}
+          {user && <GreenWallet key={user.uid} uid={user.uid} isAnonymous={isAnonymous} />}
         </aside>
       </div>
 
