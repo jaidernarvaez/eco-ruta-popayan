@@ -1,10 +1,11 @@
-import { Eraser, PenLine, Route, Save, Sparkles, Undo2, Wand2, X } from 'lucide-react'
+import { Eraser, Loader2, PenLine, Route, Save, Sparkles, Undo2, Wand2, X } from 'lucide-react'
 import {
   TRAFFIC_LABEL,
   estimateTrip,
   formatMinutes,
   routeLengthMeters,
   type LatLng,
+  type StreetRoute,
   type TrafficLevel,
 } from '../lib/geo'
 import { timeAgo, useNow } from '../hooks/useNow'
@@ -15,6 +16,9 @@ interface Props {
   truckInCity: boolean
   cityName: string
   stops: LatLng[]
+  /** Trazado por calles (OSRM) desde el camión por las paradas; null mientras se calcula. */
+  street: StreetRoute | null
+  routing: boolean
   /** Tráfico efectivo del camión (elegido por el conductor o según la hora). */
   traffic: TrafficLevel
   savedCount: number
@@ -39,7 +43,10 @@ const btn =
 export default function RoutePlanner(p: Props) {
   const now = useNow(30000)
   const stopsKm = routeLengthMeters(p.stops) / 1000
-  const totalKm = routeLengthMeters([p.truckPos, ...p.stops]) / 1000
+  // Distancia vial real (OSRM); si aún no hay respuesta, la distancia en línea recta
+  const straightKm = routeLengthMeters([p.truckPos, ...p.stops]) / 1000
+  const totalKm = p.street ? p.street.distanceKm : straightKm
+  const viaStreets = !!p.street?.viaStreets
   // Duración realista: viaje según tráfico + 1 min por cuadra (100 m)
   const trip = estimateTrip(totalKm * 1000, p.traffic)
 
@@ -63,7 +70,8 @@ export default function RoutePlanner(p: Props) {
                   <strong className="text-lg text-slate-800">{p.stops.length}</strong> paradas
                 </span>
                 <span>
-                  <strong className="text-lg text-slate-800">{totalKm.toFixed(2).replace('.', ',')}</strong> km totales
+                  <strong className="text-lg text-slate-800">{totalKm.toFixed(2).replace('.', ',')}</strong> km{' '}
+                  {viaStreets ? 'por calles' : 'en línea recta'}
                 </span>
                 <span>
                   <strong className="text-lg text-slate-800">~{formatMinutes(trip.totalMin)}</strong> duración estimada
@@ -72,8 +80,23 @@ export default function RoutePlanner(p: Props) {
               <p className="text-xs text-slate-600">
                 {formatMinutes(trip.travelMin)} de viaje con tráfico {TRAFFIC_LABEL[p.traffic].toLowerCase()} (
                 {trip.speedKmh} km/h) + {trip.blocks} min de paradas ({trip.blocks} cuadras de ~100 m) ·{' '}
-                {stopsKm.toFixed(2).replace('.', ',')} km entre paradas
+                {stopsKm.toFixed(2).replace('.', ',')} km entre paradas en línea recta
               </p>
+              {p.stops.length > 0 && (
+                <p className={`flex items-center gap-1 text-xs ${viaStreets ? 'text-eco-700' : 'text-amber-700'}`}>
+                  {p.routing ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" /> Calculando el recorrido por las calles (OSRM)…
+                    </>
+                  ) : viaStreets ? (
+                    `✓ Trazado por calles reales de OpenStreetMap: ${straightKm.toFixed(2).replace('.', ',')} km en línea recta → ${totalKm
+                      .toFixed(2)
+                      .replace('.', ',')} km por vía.`
+                  ) : (
+                    '⚠ No se pudo consultar OSRM; se muestran líneas rectas entre paradas. Se reintentará al cambiar la ruta.'
+                  )}
+                </p>
+              )}
               <p className="text-xs text-slate-500">
                 {p.editing
                   ? 'Modo edición activo: clic en el mapa para agregar una parada; clic sobre una parada numerada para quitarla.'

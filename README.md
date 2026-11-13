@@ -193,6 +193,24 @@ tiempoTotalMinutos = (distanciaKm / velocidadTraficoKmh) * 60 + Math.round(dista
 - Banner ciudadano: *«🚛 ¡Camión recolector cerca! A 800 m (~12 min: 4 min viaje + 8 paradas por cuadra)»*.
 - Panel del conductor: duración total de la ruta completa con el mismo desglose.
 
+## Etapa 8 — Rutas por calles reales (OSRM / OpenStreetMap)
+Ejecuta **`etapa8-rutas-por-calles.bat`**.
+
+- **`fetchStreetRoute(waypoints)`** (`src/lib/geo.ts`) consulta la API gratuita de OSRM
+  (`router.project-osrm.org`, con `routing.openstreetmap.de` como espejo) y devuelve `geometry`
+  (coordenadas `[lat, lng]` esquina por esquina) y `distanceKm` (`route.distance / 1000`).
+  Tiene tiempo límite de 8 s, ~1 solicitud por segundo, caché en memoria y **respaldo**: si falla,
+  conserva los puntos originales y la distancia en línea recta (`viaStreets: false`) sin romper la app.
+- **Editor y optimizador:** al marcar paradas, optimizar con reportes o usar la ruta demo, la polilínea
+  se recalcula por calles. Al guardar se escriben las paradas en `trucks/{id}.route` y la geometría
+  vial simplificada (Ramer–Douglas–Peucker, ≤ 3 000 puntos) en **`truckRoutes/{id}`**, una colección
+  aparte para que el documento del camión siga siendo liviano.
+- **Simulador:** avanza 78 m por paso **sobre la geometría vial** (`advanceAlongPath`), cuadra por
+  cuadra; la ruta demo y «Mover toda la flota» recorren circuitos por calles de cada ciudad.
+- **Duración de la ruta:** usa la distancia vial real de OSRM con tráfico + 1 min por cuadra.
+- **Nota:** el servidor público de OSRM es de demostración (sin garantía de servicio). Para uso
+  intensivo en producción conviene un servidor OSRM propio.
+
 ## Estructura
 ```
 src/

@@ -93,7 +93,13 @@ interface Props {
   highlightTruckId?: string | null
   draftPoint?: [number, number] | null
   /** Trazado del camión: línea desde su posición por las paradas numeradas. */
-  plannedRoute?: { from: [number, number] | null; stops: [number, number][]; editing: boolean } | null
+  plannedRoute?: {
+    from: [number, number] | null
+    stops: [number, number][]
+    /** Geometría por calles (OSRM). Si falta, se unen las paradas en línea recta. */
+    path?: [number, number][] | null
+    editing: boolean
+  } | null
   /** En modo edición, clic sobre una parada numerada para quitarla. */
   onStopClick?: (index: number) => void
   /** Ubicación GPS del ciudadano (punto azul). */
@@ -151,10 +157,16 @@ export default function MapaCiudad({
         </Circle>
       ))}
 
-      {plannedRoute && plannedRoute.stops.length > 0 && (
+      {plannedRoute && (plannedRoute.stops.length > 0 || (plannedRoute.path?.length ?? 0) > 1) && (
         <>
           <Polyline
-            positions={plannedRoute.from ? [plannedRoute.from, ...plannedRoute.stops] : plannedRoute.stops}
+            positions={
+              plannedRoute.path && plannedRoute.path.length > 1
+                ? plannedRoute.path
+                : plannedRoute.from
+                  ? [plannedRoute.from, ...plannedRoute.stops]
+                  : plannedRoute.stops
+            }
             pathOptions={{
               color: plannedRoute.editing ? '#7c3aed' : '#2563eb',
               weight: 5,

@@ -224,3 +224,195 @@ export function optimizeRoute(start: LatLng, stops: LatLng[]) {
     afterMeters: routeLengthMeters([start, ...optimized]),
   }
 }
+
+// ── Enrutamiento vial sobre calles reales (OSRM / OpenStreetMap) ──────────
+/**
+ * Servidores OSRM públicos (gratuitos, de demostración). Se intenta el primero y,
+ * si falla, el espejo de OpenStreetMap Alemania. Para uso intensivo en producción
+ * conviene un servidor OSRM propio.
+ */
+const OSRM_SERVERS = [
+  'https://router.project-osrm.org/route/v1/driving',
+  'https://routing.openstreetmap.de/routed-car/route/v1/driving',
+]
+const OSRM_TIMEOUT_MS = 8000
+/** OSRM público acepta hasta 100 coordenadas por solicitud. */
+const OSRM_MAX_POINTS = 100
+
+export interface StreetRoute {
+  /** Coordenadas [lat, lng] siguiendo las calles, esquina por esquina. */
+  geometry: LatLng[]
+  /** Distancia vial real (o en línea recta si `viaStreets` es false). */
+  distanceKm: number
+  /** false = no se pudo consultar OSRM y se conservaron los puntos originales. */
+  viaStreets: boolean
+}
+
+const routeCache = new Map<string, Promise<StreetRoute>>()
+let lastRequestAt = 0
+
+/** Respeta ~1 solicitud por segundo (política de uso del servidor público). */
+async function throttle() {
+  const wait = lastRequestAt + 1000 - Date.now()
+  lastRequestAt = Math.max(Date.now(), lastRequestAt + 1000)
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+}
+
+async function queryOsrm(base: string, pts: LatLng[]): Promise<StreetRoute> {
+  const coords = pts.map(([lat, lng]) => `${lng.toFixed(6)},${lat.toFixed(6)}`).join(';')
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), OSRM_TIMEOUT_MS)
+  try {
+    await throttle()
+    const res = await fetch(`${base}/${coords}?overview=full&geometries=geojson`, { signal: ctrl.signal })
+    if (!res.ok) throw new Error(`OSRM HTTP ${res.status}`)
+    const data = (await res.json()) as {
+      code: string
+      routes?: { distance: number; geometry: { coordinates: [number, number][] } }[]
+    }
+    const route = data.routes?.[0]
+    if (data.code !== 'Ok' || !route || route.geometry.coordinates.length < 2) throw new Error(`OSRM ${data.code}`)
+    return {
+      geometry: route.geometry.coordinates.map(([lng, lat]) => [lat, lng] as LatLng),
+      distanceKm: route.distance / 1000,
+      viaStreets: true,
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Traza la ruta por las calles reales que une los `waypoints` en orden.
+ * Nunca lanza error: si OSRM no responde (red, límite, tiempo), devuelve los
+ * puntos originales con la distancia en línea recta y `viaStreets: false`.
+ */
+export function fetchStreetRoute(waypoints: LatLng[]): Promise<StreetRoute> {
+  const fallback: StreetRoute = {
+    geometry: waypoints,
+    distanceKm: routeLengthMeters(waypoints) / 1000,
+    viaStreets: false,
+  }
+  if (waypoints.length < 2) return Promise.resolve(fallback)
+
+  const key = waypoints.map(([a, b]) => `${a.toFixed(5)},${b.toFixed(5)}`).join(';')
+  const cached = routeCache.get(key)
+  if (cached) return cached
+
+  const job = (async () => {
+    // Más de 100 puntos: se consulta por tramos encadenados
+    const chunks: LatLng[][] = []
+    for (let i = 0; i < waypoints.length - 1; i += OSRM_MAX_POINTS - 1) {
+      chunks.push(waypoints.slice(i, i + OSRM_MAX_POINTS))
+    }
+    const geometry: LatLng[] = []
+    let distanceKm = 0
+    for (const chunk of chunks) {
+      let part: StreetRoute | null = null
+      for (const base of OSRM_SERVERS) {
+        try {
+          part = await queryOsrm(base, chunk)
+          break
+        } catch {
+          /* se intenta el siguiente servidor */
+        }
+      }
+      if (!part) return fallback
+      geometry.push(...(geometry.length ? part.geometry.slice(1) : part.geometry))
+      distanceKm += part.distanceKm
+    }
+    return { geometry, distanceKm, viaStreets: true }
+  })()
+
+  routeCache.set(key, job)
+  // Los fallos no se guardan en caché para reintentar después
+  job.then((r) => !r.viaStreets && routeCache.delete(key))
+  return job
+}
+
+/**
+ * Simplifica una polilínea (Ramer–Douglas–Peucker) para guardarla en Firestore
+ * sin perder la forma de las calles. `toleranceM` en metros.
+ */
+export function simplifyPath(points: LatLng[], toleranceM = 3, maxPoints = 3000): LatLng[] {
+  if (points.length <= 2) return points
+  const toXY = (p: LatLng): [number, number] => [
+    p[1] * 111320 * Math.cos((points[0][0] * Math.PI) / 180),
+    p[0] * 110540,
+  ]
+  const xy = points.map(toXY)
+  const segDist = (p: number[], a: number[], b: number[]) => {
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const len2 = dx * dx + dy * dy
+    const t = len2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2)) : 0
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy))
+  }
+  const run = (tol: number) => {
+    const keep = new Array<boolean>(points.length).fill(false)
+    keep[0] = keep[points.length - 1] = true
+    const stack: [number, number][] = [[0, points.length - 1]]
+    while (stack.length) {
+      const [s, e] = stack.pop()!
+      let maxD = 0
+      let idx = -1
+      for (let i = s + 1; i < e; i++) {
+        const d = segDist(xy[i], xy[s], xy[e])
+        if (d > maxD) {
+          maxD = d
+          idx = i
+        }
+      }
+      if (idx > 0 && maxD > tol) {
+        keep[idx] = true
+        stack.push([s, idx], [idx, e])
+      }
+    }
+    return points.filter((_, i) => keep[i])
+  }
+  let tol = toleranceM
+  let out = run(tol)
+  while (out.length > maxPoints) out = run((tol *= 2))
+  return out
+}
+
+/**
+ * Avanza `stepM` metros sobre una polilínea a partir del índice `idx` (el último
+ * vértice alcanzado) y la posición actual. Devuelve la nueva posición y el índice.
+ * `done` = se llegó al final del trazado.
+ */
+export function advanceAlongPath(pos: LatLng, path: LatLng[], idx: number, stepM: number) {
+  let remaining = stepM
+  let current = pos
+  let i = idx
+  while (i < path.length - 1) {
+    const next = path[i + 1]
+    const d = hav(current, next)
+    if (d >= remaining) {
+      const f = d === 0 ? 0 : remaining / d
+      return {
+        pos: [current[0] + (next[0] - current[0]) * f, current[1] + (next[1] - current[1]) * f] as LatLng,
+        idx: i,
+        done: false,
+      }
+    }
+    remaining -= d
+    current = next
+    i++
+  }
+  return { pos: path[path.length - 1], idx: path.length - 1, done: true }
+}
+
+/** Índice del vértice de la polilínea más cercano a un punto. */
+export function nearestPathIndex(point: LatLng, path: LatLng[]) {
+  let best = 0
+  let bestD = Infinity
+  path.forEach((p, i) => {
+    const d = hav(point, p)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  })
+  return best
+}

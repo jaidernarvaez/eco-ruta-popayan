@@ -3,10 +3,11 @@ import {
   GeoPoint,
   addDoc,
   collection,
-  deleteDoc,
   doc,
+  onSnapshot,
   serverTimestamp,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore'
 import {
   AlertTriangle,
@@ -48,29 +49,25 @@ import {
   nearestNeighborhood,
   optimizeRoute,
   resolveTraffic,
+  advanceAlongPath,
+  fetchStreetRoute,
+  nearestPathIndex,
+  routeLengthMeters,
+  simplifyPath,
   type LatLng,
+  type StreetRoute,
   type TrafficLevel,
   type TrafficSetting,
 } from '../lib/geo'
 import { REPORT_LABEL, STAGE_BADGE, STAGE_LABEL, STATUS_LABEL, reportStage, type Neighborhood, type Report, type Truck, type TruckStatus, type WasteType } from '../types'
 
-const STEP_DEG = 0.0007 // ~78 m por paso
+const STEP_M = 78 // metros que avanza el simulador por paso, sobre las calles
 const TICK_MS = 2000 // recorrido de un camión: una escritura cada 2 s
 const TICK_ALL_MS = 4000 // recorrido de todos los camiones demo: cada 4 s (cuida la cuota gratuita)
 
 const card = 'rounded-xl bg-white p-4 shadow space-y-3'
 const cardTitle = 'flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500'
 const btn = 'flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold'
-
-/** Siguiente posición de un camión que avanza por una ruta (puntos de barrio). */
-function stepAlong(pos: [number, number], route: [number, number][], waypoint: number) {
-  const target = route[waypoint % route.length]
-  const dLat = target[0] - pos[0]
-  const dLng = target[1] - pos[1]
-  const dist = Math.hypot(dLat, dLng)
-  if (dist <= STEP_DEG) return { next: target, waypoint: waypoint + 1 }
-  return { next: [pos[0] + (dLat / dist) * STEP_DEG, pos[1] + (dLng / dist) * STEP_DEG] as [number, number], waypoint }
-}
 
 export default function DriverView() {
   const { user, isAdmin } = useAuth()
@@ -116,6 +113,64 @@ export default function DriverView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedStops])
 
+  // Geometría vial guardada (colección truckRoutes, separada para que el documento del camión sea liviano)
+  const [savedStreet, setSavedStreet] = useState<{ stopsKey: string; route: StreetRoute } | null>(null)
+  useEffect(() => {
+    setSavedStreet(null)
+    if (!myTruck) return
+    return onSnapshot(
+      doc(db, 'truckRoutes', myTruck.id),
+      (snap) => {
+        if (!snap.exists()) return setSavedStreet(null)
+        const d = snap.data() as { stops: GeoPoint[]; path: GeoPoint[]; distanceKm: number; viaStreets: boolean }
+        setSavedStreet({
+          stopsKey: JSON.stringify(d.stops.map((g) => [g.latitude, g.longitude])),
+          route: {
+            geometry: d.path.map((g) => [g.latitude, g.longitude] as LatLng),
+            distanceKm: d.distanceKm,
+            viaStreets: d.viaStreets,
+          },
+        })
+      },
+      () => setSavedStreet(null),
+    )
+  }, [myTruck?.id])
+
+  // Vista previa por calles: camión → paradas. Se recalcula al cambiar las paradas (no al moverse el camión).
+  const stopsKey = JSON.stringify(draftStops)
+  const [street, setStreet] = useState<{ key: string; route: StreetRoute } | null>(null)
+  const [routing, setRouting] = useState(false)
+  useEffect(() => {
+    if (!myTruck || draftStops.length === 0) {
+      setStreet(null)
+      return
+    }
+    if (savedStreet && savedStreet.stopsKey === stopsKey && savedStreet.route.geometry.length > 1) {
+      setStreet({ key: stopsKey, route: savedStreet.route })
+      return
+    }
+    let cancelled = false
+    setRouting(true)
+    const timer = window.setTimeout(async () => {
+      const from = posRef.current ?? [myTruck.location.latitude, myTruck.location.longitude]
+      const r = await fetchStreetRoute([from, ...draftStops])
+      if (!cancelled) {
+        setStreet({ key: stopsKey, route: r })
+        setRouting(false)
+      }
+    }, 600)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      setRouting(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopsKey, myTruck?.id, savedStreet?.stopsKey])
+  const streetForDraft = street && street.key === stopsKey ? street.route : null
+
+  // Trazado que el simulador está recorriendo (para dibujarlo mientras avanza)
+  const [simPath, setSimPath] = useState<LatLng[] | null>(null)
+
   // GPS real del dispositivo
   const [gpsOn, setGpsOn] = useState(false)
   const [gpsInfo, setGpsInfo] = useState<{ accuracy: number; at: string } | null>(null)
@@ -127,7 +182,10 @@ export default function DriverView() {
   const route = customRoute ?? demoRoute
   const posRef = useRef<[number, number] | null>(null)
   const waypointRef = useRef(0)
-  const allStateRef = useRef<Record<string, { pos: [number, number]; waypoint: number }>>({})
+  /** Estado del simulador sobre calles: trazado, vértice alcanzado y bucle demo (si aplica). */
+  const simRef = useRef<{ path: LatLng[]; idx: number; loop: LatLng[] | null } | null>(null)
+  const allStateRef = useRef<Record<string, { pos: LatLng; idx: number }>>({})
+  const loopsRef = useRef<Record<string, LatLng[]>>({})
 
   const fail = (e: unknown) => setMessage(e instanceof Error ? e.message : String(e))
 
@@ -196,24 +254,30 @@ export default function DriverView() {
 
   // Recorrido automático del camión seleccionado (en la ciudad activa)
   useEffect(() => {
-    if (!simulating || !myTruck || route.length < 1) return
-    const isCustom = !!customRoute
+    if (!simulating || !myTruck || !simRef.current) return
     const id = window.setInterval(() => {
-      if (!posRef.current) return
-      if (isCustom && waypointRef.current >= route.length) {
-        setSimulating(false)
-        setMessage(`Ruta completada: ${myTruck.plate} llegó a la última parada.`)
-        return
+      const sim = simRef.current
+      if (!posRef.current || !sim) return
+      const step = advanceAlongPath(posRef.current, sim.path, sim.idx, STEP_M)
+      sim.idx = step.idx
+      if (step.done) {
+        if (sim.loop) {
+          // Ruta demo: vuelve a empezar el circuito por las calles
+          simRef.current = { path: sim.loop, idx: 0, loop: sim.loop }
+          setSimPath(sim.loop)
+        } else {
+          setSimulating(false)
+          setSimPath(null)
+          setMessage(`Ruta completada: ${myTruck.plate} llegó a la última parada.`)
+        }
       }
-      const { next, waypoint } = stepAlong(posRef.current, route, waypointRef.current)
-      waypointRef.current = waypoint
-      moveTruck(next[0], next[1], { status: 'en_ruta' }).catch((e) => {
+      moveTruck(step.pos[0], step.pos[1], { status: 'en_ruta' }).catch((e) => {
         fail(e)
         setSimulating(false)
       })
     }, TICK_MS)
     return () => window.clearInterval(id)
-  }, [simulating, myTruck?.id, route, customRoute])
+  }, [simulating, myTruck?.id])
 
   const allTrucksRef = useRef(allTrucks)
   allTrucksRef.current = allTrucks
@@ -224,14 +288,17 @@ export default function DriverView() {
     const id = window.setInterval(() => {
       for (const t of allTrucksRef.current) {
         const tCity = cityOf(t)
-        const tRoute = routeFor(tCity)
-        if (tRoute.length < 2) continue
-        const st = allStateRef.current[t.id] ?? {
-          pos: [t.location.latitude, t.location.longitude] as [number, number],
-          waypoint: 0,
+        const loop = loopsRef.current[tCity]
+        if (!loop || loop.length < 2) continue
+        let st = allStateRef.current[t.id]
+        if (!st) {
+          // Se incorpora al circuito por calles en el punto más cercano a su posición
+          const idx = nearestPathIndex([t.location.latitude, t.location.longitude], loop)
+          st = { pos: loop[idx], idx }
         }
-        const { next, waypoint } = stepAlong(st.pos, tRoute, st.waypoint)
-        allStateRef.current[t.id] = { pos: next, waypoint }
+        const step = advanceAlongPath(st.pos, loop, st.idx, STEP_M)
+        allStateRef.current[t.id] = step.done ? { pos: loop[0], idx: 0 } : { pos: step.pos, idx: step.idx }
+        const next = step.pos
         const zones = allNeighborhoods.filter((n) => n.city === tCity)
         writePosition(t, next[0], next[1], tCity, zones, { status: 'en_ruta' }).catch((e) => {
           fail(e)
@@ -243,15 +310,22 @@ export default function DriverView() {
     return () => window.clearInterval(id)
   }, [simulatingAll])
 
+  /** Circuito demo de una ciudad por calles reales (barrios en orden y regreso al inicio). */
+  async function demoLoop(cityId: string): Promise<StreetRoute> {
+    const stops = routeFor(cityId)
+    return fetchStreetRoute(stops.length > 1 ? [...stops, stops[0]] : stops)
+  }
+
   async function toggleSimulation() {
     if (simulating) {
       setSimulating(false)
+      setSimPath(null)
       return
     }
     if (!myTruck) return
     setSimulatingAll(false)
     setGpsOn(false)
-    waypointRef.current = 0
+    setEditing(false)
     // Si el camión está en otra ciudad, se traslada al inicio de la ruta de la ciudad activa
     if (cityOf(myTruck) !== city.id || !insideCity(myTruck.location.latitude, myTruck.location.longitude, city)) {
       const start = route[0] ?? [city.lat, city.lng]
@@ -261,10 +335,49 @@ export default function DriverView() {
         fail(e)
         return
       }
-      waypointRef.current = customRoute ? 0 : 1
       setMessage(`Camión ${myTruck.plate} trasladado a ${city.name} para iniciar la ruta.`)
     }
+    const from = posRef.current ?? [myTruck.location.latitude, myTruck.location.longitude]
+    setBusy(true)
+    setMessage('Calculando el recorrido por las calles…')
+    let sim: { path: LatLng[]; idx: number; loop: LatLng[] | null }
+    let via = true
+    if (customRoute) {
+      const r = await fetchStreetRoute([from, ...customRoute])
+      via = r.viaStreets
+      sim = { path: r.geometry, idx: 0, loop: null }
+    } else {
+      const [approach, loop] = await Promise.all([fetchStreetRoute([from, demoRoute[0]]), demoLoop(city.id)])
+      via = approach.viaStreets && loop.viaStreets
+      sim = { path: [...approach.geometry, ...loop.geometry.slice(1)], idx: 0, loop: loop.geometry }
+    }
+    setBusy(false)
+    simRef.current = sim
+    setSimPath(sim.path)
+    setMessage(
+      via
+        ? `Recorrido por calles listo (${(routeLengthMeters(sim.path) / 1000).toFixed(1).replace('.', ',')} km). El camión avanza cuadra por cuadra.`
+        : 'No se pudo consultar el trazado vial (OSRM); el simulador usa líneas rectas entre paradas.',
+    )
     setSimulating(true)
+  }
+
+  async function toggleFleetSimulation() {
+    if (simulatingAll) {
+      setSimulatingAll(false)
+      return
+    }
+    setSimulating(false)
+    setSimPath(null)
+    allStateRef.current = {}
+    setBusy(true)
+    setMessage('Calculando los circuitos por calles de cada ciudad…')
+    const cities = [...new Set(allTrucks.map((t) => cityOf(t)))]
+    // Secuencial: el servidor público de OSRM pide ~1 solicitud por segundo
+    for (const c of cities) loopsRef.current[c] = (await demoLoop(c)).geometry
+    setBusy(false)
+    setMessage(`Flota en movimiento por calles en ${cities.length} ciudad(es).`)
+    setSimulatingAll(true)
   }
 
   // ── GPS real del dispositivo ──────────────────────────────
@@ -369,20 +482,49 @@ export default function DriverView() {
       setMessage(`El camión ${myTruck.plate} está en ${getCity(cityOf(myTruck)).name}. Cambia a esa ciudad para editar su ruta.`)
       return
     }
+    if (!user) return
     try {
-      await updateDoc(doc(db, 'trucks', myTruck.id), {
-        route: stops.map(([lat, lng]) => new GeoPoint(lat, lng)),
+      setBusy(true)
+      // Geometría por calles para guardar (reutiliza la vista previa si corresponde a estas paradas)
+      const key = JSON.stringify(stops)
+      const from = posRef.current ?? [myTruck.location.latitude, myTruck.location.longitude]
+      const sr: StreetRoute =
+        stops.length === 0
+          ? { geometry: [], distanceKm: 0, viaStreets: true }
+          : street && street.key === key
+            ? street.route
+            : await fetchStreetRoute([from, ...stops])
+      const path = simplifyPath(sr.geometry, 3, 3000)
+      const toGeo = (pts: LatLng[]) => pts.map(([lat, lng]) => new GeoPoint(lat, lng))
+
+      const batch = writeBatch(db)
+      batch.update(doc(db, 'trucks', myTruck.id), {
+        route: toGeo(stops),
         routeUpdatedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
+      batch.set(doc(db, 'truckRoutes', myTruck.id), {
+        stops: toGeo(stops),
+        path: toGeo(path),
+        distanceKm: Math.round(sr.distanceKm * 1000) / 1000,
+        viaStreets: sr.viaStreets,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.uid,
+      })
+      await batch.commit()
+      setStreet({ key, route: sr })
       setEditing(false)
       setMessage(
         stops.length
-          ? `Trazado guardado: ${stops.length} parada(s). «Iniciar ruta» lo seguirá.`
+          ? `Trazado guardado: ${stops.length} parada(s), ${sr.distanceKm.toFixed(2).replace('.', ',')} km ${
+              sr.viaStreets ? 'por calles' : 'en línea recta (OSRM no respondió)'
+            }. «Recorrer mi trazado» lo seguirá.`
           : 'Ruta borrada. El simulador vuelve a la ruta demo de la ciudad.',
       )
     } catch (e) {
       fail(e)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -414,8 +556,10 @@ export default function DriverView() {
     setDraftStops(result.stops)
     setBusy(false)
     await saveRoute(result.stops)
+    const vial = await fetchStreetRoute([start, ...result.stops]) // en caché: misma consulta que al guardar
     const saved = result.beforeMeters - result.afterMeters
     setMessage(
+      `${vial.viaStreets ? `Recorrido por calles: ${vial.distanceKm.toFixed(2).replace('.', ',')} km. ` : ''}` +
       `Ruta optimizada: ${result.stops.length} paradas (${newOnes.length} reporte(s) nuevo(s) incluidos), ${(result.afterMeters / 1000).toFixed(2)} km` +
         (saved > 1 ? ` (ahorra ${(saved / 1000).toFixed(2)} km frente al orden anterior).` : '.'),
     )
@@ -516,7 +660,10 @@ export default function DriverView() {
   async function removeTruck() {
     if (!isAdmin || !myTruck || !confirm(`¿Eliminar el camión ${myTruck.plate}?`)) return
     setSimulating(false)
-    await deleteDoc(doc(db, 'trucks', myTruck.id)).catch(fail)
+    const batch = writeBatch(db)
+    batch.delete(doc(db, 'trucks', myTruck.id))
+    batch.delete(doc(db, 'truckRoutes', myTruck.id))
+    await batch.commit().catch(fail)
     setSelectedId(null)
   }
 
@@ -700,7 +847,7 @@ export default function DriverView() {
               </label>
               <button
                 onClick={toggleSimulation}
-                disabled={route.length < 2}
+                disabled={route.length < 1 || busy}
                 className={`${btn} w-full text-white disabled:opacity-50 ${
                   simulating ? 'bg-red-500 hover:bg-red-600' : 'bg-eco-600 hover:bg-eco-700'
                 }`}
@@ -714,12 +861,8 @@ export default function DriverView() {
               </button>
               {isAdmin && (
               <button
-                onClick={() => {
-                  setSimulating(false)
-                  allStateRef.current = {}
-                  setSimulatingAll((v) => !v)
-                }}
-                disabled={allTrucks.length < 2}
+                onClick={toggleFleetSimulation}
+                disabled={allTrucks.length < 2 || busy}
                 className={`${btn} w-full py-1.5 disabled:opacity-50 ${
                   simulatingAll ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
@@ -839,6 +982,8 @@ export default function DriverView() {
           truckInCity={cityOf(myTruck) === city.id}
           cityName={city.name}
           stops={draftStops}
+          street={streetForDraft}
+          routing={routing}
           traffic={resolveTraffic(myTruck.traffic)}
           savedCount={savedStops.length}
           dirty={JSON.stringify(draftStops) !== JSON.stringify(savedStops)}
@@ -879,8 +1024,14 @@ export default function DriverView() {
           focus={focus}
           picking={!!myTruck}
           plannedRoute={
-            myTruck && cityOf(myTruck) === city.id && draftStops.length > 0
-              ? { from: [myTruck.location.latitude, myTruck.location.longitude], stops: draftStops, editing }
+            myTruck && cityOf(myTruck) === city.id && (draftStops.length > 0 || simPath)
+              ? {
+                  from: [myTruck.location.latitude, myTruck.location.longitude],
+                  stops: draftStops,
+                  // Mientras simula se dibuja el trazado que recorre; si no, la vista previa por calles
+                  path: simulating && simPath ? simPath : (streetForDraft?.geometry ?? null),
+                  editing,
+                }
               : null
           }
           onStopClick={(i) => setDraftStops((prev) => prev.filter((_, k) => k !== i))}

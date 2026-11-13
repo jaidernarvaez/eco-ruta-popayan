@@ -2,7 +2,7 @@ rules_version = '2';
 
 // ─────────────────────────────────────────────────────────────
 //  EcoRuta Colombia · Reglas de seguridad de Cloud Firestore
-//  Colecciones: users, trucks, neighborhoods, schedules, reports
+//  Colecciones: users, trucks, truckRoutes, neighborhoods, schedules, reports
 // ─────────────────────────────────────────────────────────────
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -118,6 +118,29 @@ service cloud.firestore {
                      'route', 'routeUpdatedAt', 'traffic']);
 
       // Solo el ADMINISTRADOR elimina camiones.
+      allow delete: if isAdmin();
+    }
+
+    // ── truckRoutes/{truckId}: trazado por calles reales (OSRM) de cada camión ──
+    // Separado de trucks para que el documento del camión (que se actualiza cada
+    // pocos segundos) siga siendo liviano para los ciudadanos.
+    match /truckRoutes/{truckId} {
+      allow read: if signedIn();
+
+      // Administrador o conductor, solo para camiones existentes.
+      allow create, update: if isDriver()
+        && exists(/databases/$(database)/documents/trucks/$(truckId))
+        && request.resource.data.keys().hasOnly(['stops', 'path', 'distanceKm', 'viaStreets',
+                                                 'updatedAt', 'updatedBy'])
+        && request.resource.data.stops is list && request.resource.data.stops.size() <= 60
+        && request.resource.data.path is list && request.resource.data.path.size() <= 3000
+        && request.resource.data.distanceKm is number
+        && request.resource.data.distanceKm >= 0 && request.resource.data.distanceKm < 2000
+        && request.resource.data.viaStreets is bool
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+
+      // Se borra junto con el camión (solo administrador).
       allow delete: if isAdmin();
     }
 
