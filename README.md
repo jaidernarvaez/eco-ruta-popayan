@@ -118,7 +118,7 @@ Ejecuta **`etapa5-experiencia-ciudadana.bat`**: compila, publica reglas y Hostin
 - **Alertas de proximidad y ETA** (`ProximityBanner`): distancia Haversine (`src/lib/geo.ts`) entre el
   barrio elegido —o la ubicación GPS opcional del ciudadano— y los camiones activos de la ciudad.
   Si hay uno a menos de **1,5 km** aparece una alerta (ámbar; verde por debajo de 750 m) con la
-  distancia y el tiempo estimado a **20 km/h**, p. ej. *«🚛 ¡Camión recolector cerca! A 750 m (~2 min)…»*.
+  distancia y el tiempo estimado (ver «Tiempo estimado realista» en la Etapa 7).
   **Activar aviso sonoro** genera un tono suave con Web Audio API (sin archivos) una sola vez cuando
   un camión cruza el umbral de **1 km** hacia la zona. Funciona con la página abierta.
 - **Horarios por barrio** (`src/data/schedules.ts`, `ScheduleCard`): días y franjas habituales de
@@ -139,7 +139,7 @@ Ejecuta **`etapa6-rutas-conductor.bat`**: compila, publica reglas y Hosting, hac
 - **Editor visual de trazado** (`RoutePlanner`): «Editar trazado en el mapa» convierte cada clic en
   una parada numerada (polilínea morada punteada mientras se edita, azul al guardar). Incluye
   **Deshacer último punto**, **Limpiar ruta**, **Optimizar orden**, **Descartar cambios** y
-  **Guardar trazado en Firestore**, con distancia total en km y minutos estimados a 20 km/h.
+  **Guardar trazado en Firestore**, con distancia total en km y duración estimada (tráfico + paradas por cuadra).
   El trazado se guarda en `trucks/{id}.route` (lista de GeoPoint, máx. 60) y «Recorrer mi trazado»
   lo sigue parada por parada; sin trazado propio se usa la ruta demo de la ciudad.
 - **Optimización automática** (`optimizeRoute` en `src/lib/geo.ts`): Vecino Más Cercano + mejora
@@ -173,6 +173,25 @@ publica reglas y Hosting, hace commit/push y abre la app.
 - **Editar ruta en el mapa:** clic en el mapa agrega una parada; clic sobre una parada numerada la
   quita. **Optimizar ruta con reportes activos** une las paradas actuales con los reportes
   `pendiente`/`en_ruta` de la ciudad (sin duplicar los que ya están a menos de 30 m) y las ordena.
+
+### Tiempo estimado realista (ETA)
+Para un camión recolector en Colombia (`estimateTrip` en `src/lib/geo.ts`):
+
+```
+tiempoTotalMinutos = (distanciaKm / velocidadTraficoKmh) * 60 + Math.round(distanciaKm / 0.1) * 1
+```
+
+| Tráfico | Velocidad | Cuándo |
+|---|---|---|
+| Fluido | 22 km/h | Hora valle (automático) |
+| Moderado | 17 km/h | Elegido por el conductor |
+| Pesado | 13 km/h | Hora pico (automático): 7:00–9:00, 12:00–14:00 y 17:00–19:30 |
+
+- 1 cuadra ≈ 100 m y se suma **1 minuto de parada por cuadra** recorrida.
+- El conductor elige en el simulador *Automático por hora*, *Fluido*, *Moderado* o *Pesado*; se
+  guarda en `trucks/{id}.traffic` y el ciudadano lo ve reflejado en su ETA.
+- Banner ciudadano: *«🚛 ¡Camión recolector cerca! A 800 m (~12 min: 4 min viaje + 8 paradas por cuadra)»*.
+- Panel del conductor: duración total de la ruta completa con el mismo desglose.
 
 ## Estructura
 ```

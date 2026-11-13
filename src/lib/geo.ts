@@ -43,17 +43,86 @@ export function nearestNeighborhood<T extends { id: string; center: { latitude: 
   return best.id
 }
 
-/** Velocidad urbana promedio supuesta para el camión recolector. */
-export const TRUCK_SPEED_KMH = 20
+// ── Tiempo estimado realista para un camión recolector en Colombia ───────
+/**
+ * Nivel de tráfico. El conductor puede fijarlo por camión; en `auto` se deduce
+ * de la hora: pico 7:00–9:00, 12:00–14:00 y 17:00–19:30 → pesado; resto → fluido.
+ */
+export type TrafficLevel = 'fluido' | 'moderado' | 'pesado'
+export type TrafficSetting = 'auto' | TrafficLevel
 
-/** Minutos estimados de llegada a velocidad urbana promedio (mínimo 1). */
-export function etaMinutes(meters: number, speedKmh = TRUCK_SPEED_KMH) {
-  return Math.max(1, Math.round(meters / ((speedKmh * 1000) / 60)))
+export const TRAFFIC_SPEED_KMH: Record<TrafficLevel, number> = {
+  fluido: 22, // hora valle
+  moderado: 17,
+  pesado: 13, // hora pico
 }
 
-export function formatEta(meters: number) {
-  const m = etaMinutes(meters)
-  return m < 60 ? `~${m} min` : `~${Math.floor(m / 60)} h ${m % 60} min`
+export const TRAFFIC_LABEL: Record<TrafficLevel, string> = {
+  fluido: 'Fluido',
+  moderado: 'Moderado',
+  pesado: 'Pesado',
+}
+
+/** Franjas de hora pico en minutos desde medianoche (hora local del dispositivo). */
+const PEAK_WINDOWS: [number, number][] = [
+  [7 * 60, 9 * 60],
+  [12 * 60, 14 * 60],
+  [17 * 60, 19 * 60 + 30],
+]
+
+export function isPeakHour(date = new Date()) {
+  const m = date.getHours() * 60 + date.getMinutes()
+  return PEAK_WINDOWS.some(([a, b]) => m >= a && m < b)
+}
+
+export function resolveTraffic(setting: TrafficSetting | undefined, date = new Date()): TrafficLevel {
+  if (!setting || setting === 'auto') return isPeakHour(date) ? 'pesado' : 'fluido'
+  return setting
+}
+
+/** 1 cuadra ≈ 100 m; el camión se detiene ~1 minuto por cuadra para recoger. */
+export const BLOCK_KM = 0.1
+export const MIN_PER_BLOCK = 1
+
+export interface TripEstimate {
+  km: number
+  level: TrafficLevel
+  speedKmh: number
+  /** Minutos en movimiento: (km / velocidad) × 60 */
+  travelMin: number
+  /** Cuadras del tramo: round(km / 0,1) */
+  blocks: number
+  /** Total = viaje + 1 min por cuadra */
+  totalMin: number
+}
+
+/**
+ * tiempoTotalMinutos = (distanciaKm / velocidadTraficoKmh) * 60 + Math.round(distanciaKm / 0.1) * 1
+ * El viaje se redondea al minuto para que el desglose mostrado sume el total.
+ */
+export function estimateTrip(meters: number, level: TrafficLevel): TripEstimate {
+  const km = Math.max(0, meters) / 1000
+  const speedKmh = TRAFFIC_SPEED_KMH[level]
+  const travelMin = Math.round((km / speedKmh) * 60)
+  const blocks = Math.round(km / BLOCK_KM)
+  return { km, level, speedKmh, travelMin, blocks, totalMin: travelMin + blocks * MIN_PER_BLOCK }
+}
+
+export function formatMinutes(min: number) {
+  if (min < 1) return 'menos de 1 min'
+  if (min < 60) return `${min} min`
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return m ? `${h} h ${m} min` : `${h} h`
+}
+
+/** "~11 min" */
+export const formatTripTotal = (t: TripEstimate) => (t.totalMin < 1 ? 'llegando' : `~${formatMinutes(t.totalMin)}`)
+
+/** "3 min viaje + 8 paradas por cuadra" */
+export function formatTripBreakdown(t: TripEstimate) {
+  const cuadras = t.blocks === 1 ? '1 parada por cuadra' : `${t.blocks} paradas por cuadra`
+  return `${formatMinutes(t.travelMin)} viaje + ${cuadras}`
 }
 
 // ── Rutas ───────────────────────────────────────────────────

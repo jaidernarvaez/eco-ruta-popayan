@@ -17,6 +17,8 @@ export interface Truck {
   city?: string
   neighborhoodId: string | null
   updatedAt: Timestamp | null
+  /** Tráfico elegido por el conductor ('auto' = según hora pico). Ver src/lib/geo.ts */
+  traffic?: 'auto' | 'fluido' | 'moderado' | 'pesado'
   /** Trazado del recorrido definido por el conductor (paradas en orden). */
   route?: GeoPoint[]
   routeUpdatedAt?: Timestamp | null

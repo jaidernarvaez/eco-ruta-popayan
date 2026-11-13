@@ -1,5 +1,12 @@
 import { Eraser, PenLine, Route, Save, Sparkles, Undo2, Wand2, X } from 'lucide-react'
-import { routeLengthMeters, type LatLng } from '../lib/geo'
+import {
+  TRAFFIC_LABEL,
+  estimateTrip,
+  formatMinutes,
+  routeLengthMeters,
+  type LatLng,
+  type TrafficLevel,
+} from '../lib/geo'
 import { timeAgo, useNow } from '../hooks/useNow'
 
 interface Props {
@@ -8,6 +15,8 @@ interface Props {
   truckInCity: boolean
   cityName: string
   stops: LatLng[]
+  /** Tráfico efectivo del camión (elegido por el conductor o según la hora). */
+  traffic: TrafficLevel
   savedCount: number
   dirty: boolean
   routeUpdatedAt: number | null
@@ -31,7 +40,8 @@ export default function RoutePlanner(p: Props) {
   const now = useNow(30000)
   const stopsKm = routeLengthMeters(p.stops) / 1000
   const totalKm = routeLengthMeters([p.truckPos, ...p.stops]) / 1000
-  const minutes = Math.round((totalKm / 20) * 60)
+  // Duración realista: viaje según tráfico + 1 min por cuadra (100 m)
+  const trip = estimateTrip(totalKm * 1000, p.traffic)
 
   return (
     <section
@@ -55,10 +65,15 @@ export default function RoutePlanner(p: Props) {
                 <span>
                   <strong className="text-lg text-slate-800">{totalKm.toFixed(2).replace('.', ',')}</strong> km totales
                 </span>
-                <span className="text-slate-500">
-                  ({stopsKm.toFixed(2).replace('.', ',')} km entre paradas · ~{minutes} min a 20 km/h)
+                <span>
+                  <strong className="text-lg text-slate-800">~{formatMinutes(trip.totalMin)}</strong> duración estimada
                 </span>
               </div>
+              <p className="text-xs text-slate-600">
+                {formatMinutes(trip.travelMin)} de viaje con tráfico {TRAFFIC_LABEL[p.traffic].toLowerCase()} (
+                {trip.speedKmh} km/h) + {trip.blocks} min de paradas ({trip.blocks} cuadras de ~100 m) ·{' '}
+                {stopsKm.toFixed(2).replace('.', ',')} km entre paradas
+              </p>
               <p className="text-xs text-slate-500">
                 {p.editing
                   ? 'Modo edición activo: clic en el mapa para agregar una parada; clic sobre una parada numerada para quitarla.'

@@ -10,7 +10,17 @@ import { useAuth } from '../context/AuthContext'
 import { useCity } from '../context/CityContext'
 import { cityOf, useNeighborhoods, useRecentReports, useTrucks } from '../hooks/useFirestoreData'
 import { timeAgo, useNow } from '../hooks/useNow'
-import { distanceMeters, formatDistance, formatEta, insideCity, nearestNeighborhood } from '../lib/geo'
+import {
+  TRAFFIC_LABEL,
+  distanceMeters,
+  estimateTrip,
+  formatDistance,
+  formatTripBreakdown,
+  formatTripTotal,
+  insideCity,
+  nearestNeighborhood,
+  resolveTraffic,
+} from '../lib/geo'
 import { STATUS_LABEL, WASTE_LABEL, reportStage, type Truck, type WasteType } from '../types'
 
 type Filter = 'todos' | WasteType
@@ -279,7 +289,7 @@ export default function CitizenView() {
                     <span>
                       {meters !== null ? (
                         <strong className="text-eco-700">
-                          a {formatDistance(meters)} · {formatEta(meters)}
+                          a {formatDistance(meters)} · {formatTripTotal(estimateTrip(meters, resolveTraffic(truck.traffic)))}
                         </strong>
                       ) : (
                         'Elige tu barrio para ver distancia y tiempo'
@@ -287,6 +297,12 @@ export default function CitizenView() {
                     </span>
                     <span>{timeAgo(truck.updatedAt?.toMillis(), now)}</span>
                   </div>
+                  {meters !== null && (
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                      {formatTripBreakdown(estimateTrip(meters, resolveTraffic(truck.traffic)))} · tráfico{' '}
+                      {TRAFFIC_LABEL[resolveTraffic(truck.traffic)].toLowerCase()}
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>

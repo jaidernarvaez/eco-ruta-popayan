@@ -83,7 +83,7 @@ service cloud.firestore {
     function validTruck(d) {
       return d.keys().hasOnly(['plate', 'wasteType', 'status', 'location', 'driverId',
                                'driverEmail', 'neighborhoodId', 'updatedAt', 'city',
-                               'route', 'routeUpdatedAt'])
+                               'route', 'routeUpdatedAt', 'traffic'])
         && d.keys().hasAll(['plate', 'wasteType', 'status', 'location', 'driverId', 'updatedAt'])
         && d.plate is string && d.plate.matches('^[A-Z]{3}[0-9]{3}$')
         && validWasteType(d.wasteType)
@@ -94,6 +94,8 @@ service cloud.firestore {
         // Trazado del conductor: lista de paradas (GeoPoint), máximo 60
         && (!('route' in d) || (d.route is list && d.route.size() <= 60))
         && (!('routeUpdatedAt' in d) || d.routeUpdatedAt is timestamp)
+        // Estado de tráfico elegido por el conductor (para el tiempo estimado)
+        && (!('traffic' in d) || d.traffic in ['auto', 'fluido', 'moderado', 'pesado'])
         && d.updatedAt == request.time;
     }
 
@@ -113,7 +115,7 @@ service cloud.firestore {
         && validTruck(request.resource.data)
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['location', 'status', 'neighborhoodId', 'updatedAt', 'city',
-                     'route', 'routeUpdatedAt']);
+                     'route', 'routeUpdatedAt', 'traffic']);
 
       // Solo el ADMINISTRADOR elimina camiones.
       allow delete: if isAdmin();

@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BellRing, BellOff, Crosshair, Info, LocateOff, Truck as TruckIcon } from 'lucide-react'
-import { distanceMeters, formatDistance, formatEta } from '../lib/geo'
+import {
+  TRAFFIC_LABEL,
+  distanceMeters,
+  estimateTrip,
+  formatDistance,
+  formatTripBreakdown,
+  formatTripTotal,
+  resolveTraffic,
+} from '../lib/geo'
 import { playChime, unlockAudio } from '../lib/chime'
 import { WASTE_LABEL, type Truck } from '../types'
 
@@ -30,10 +38,11 @@ export default function ProximityBanner({ cityName, trucks, reference, gpsOn, gp
     if (!reference) return []
     return trucks
       .filter((t) => t.status !== 'fuera_de_servicio')
-      .map((t) => ({
-        truck: t,
-        meters: distanceMeters(reference.lat, reference.lng, t.location.latitude, t.location.longitude),
-      }))
+      .map((t) => {
+        const meters = distanceMeters(reference.lat, reference.lng, t.location.latitude, t.location.longitude)
+        // Tiempo realista: tráfico del camión (o de la hora) + 1 min por cuadra
+        return { truck: t, meters, trip: estimateTrip(meters, resolveTraffic(t.traffic)) }
+      })
       .sort((a, b) => a.meters - b.meters)
   }, [trucks, reference])
 
@@ -109,10 +118,12 @@ export default function ProximityBanner({ cityName, trucks, reference, gpsOn, gp
               <>
                 <p className="text-base font-bold sm:text-lg">
                   🚛 {veryNear ? '¡El camión recolector ya llega!' : '¡Camión recolector cerca!'} A{' '}
-                  {formatDistance(nearest.meters)} ({formatEta(nearest.meters)}) de {reference.label}
+                  {formatDistance(nearest.meters)} ({formatTripTotal(nearest.trip)}: {formatTripBreakdown(nearest.trip)}) de{' '}
+                  {reference.label}
                 </p>
                 <p className="text-sm opacity-80">
-                  {nearest.truck.plate} · {WASTE_LABEL[nearest.truck.wasteType]}
+                  {nearest.truck.plate} · {WASTE_LABEL[nearest.truck.wasteType]} · Tráfico{' '}
+                  {TRAFFIC_LABEL[nearest.trip.level].toLowerCase()} ({nearest.trip.speedKmh} km/h)
                   {ranked.filter((r) => r.meters <= ALERT_RADIUS_M).length > 1 &&
                     ` · ${ranked.filter((r) => r.meters <= ALERT_RADIUS_M).length} camiones a menos de 1,5 km`}
                   {' · '}¡Saca tus bolsas a tiempo!
@@ -122,11 +133,13 @@ export default function ProximityBanner({ cityName, trucks, reference, gpsOn, gp
             {reference && nearest && !inAlert && (
               <>
                 <p className="font-semibold">
-                  El camión más cercano está a {formatDistance(nearest.meters)} ({formatEta(nearest.meters)}) de{' '}
-                  {reference.label}
+                  El camión más cercano está a {formatDistance(nearest.meters)} ({formatTripTotal(nearest.trip)}:{' '}
+                  {formatTripBreakdown(nearest.trip)}) de {reference.label}
                 </p>
                 <p className="text-sm text-slate-500">
-                  Te avisaremos cuando esté a menos de 1,5 km. Tiempo calculado a 20 km/h.
+                  Te avisaremos cuando esté a menos de 1,5 km. Tiempo con tráfico{' '}
+                  {TRAFFIC_LABEL[nearest.trip.level].toLowerCase()} ({nearest.trip.speedKmh} km/h) + 1 min por cuadra
+                  recorrida.
                 </p>
               </>
             )}

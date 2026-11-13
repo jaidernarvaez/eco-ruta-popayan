@@ -35,7 +35,23 @@ import { cityOf, useNeighborhoods, useRecentReports, useTrucks } from '../hooks/
 import { timeAgo, useNow } from '../hooks/useNow'
 import { seedBaseData } from '../data/seed'
 import { CITIES, DEMO_TRUCKS, getCity, routeFor } from '../data/cities'
-import { CITY_RADIUS_M, distanceMeters, formatDistance, insideCity, nearestNeighborhood, optimizeRoute, type LatLng } from '../lib/geo'
+import {
+  CITY_RADIUS_M,
+  TRAFFIC_LABEL,
+  TRAFFIC_SPEED_KMH,
+  distanceMeters,
+  estimateTrip,
+  formatDistance,
+  formatTripTotal,
+  insideCity,
+  isPeakHour,
+  nearestNeighborhood,
+  optimizeRoute,
+  resolveTraffic,
+  type LatLng,
+  type TrafficLevel,
+  type TrafficSetting,
+} from '../lib/geo'
 import { REPORT_LABEL, STAGE_BADGE, STAGE_LABEL, STATUS_LABEL, reportStage, type Neighborhood, type Report, type Truck, type TruckStatus, type WasteType } from '../types'
 
 const STEP_DEG = 0.0007 // ~78 m por paso
@@ -485,6 +501,12 @@ export default function DriverView() {
     }
   }
 
+  /** Estado de tráfico del camión: lo usan el ETA del ciudadano y la duración de la ruta. */
+  async function setTraffic(traffic: TrafficSetting) {
+    if (!myTruck) return
+    await updateDoc(doc(db, 'trucks', myTruck.id), { traffic, updatedAt: serverTimestamp() }).catch(fail)
+  }
+
   async function setStatus(status: TruckStatus) {
     if (!myTruck) return
     if (status !== 'en_ruta') setSimulating(false)
@@ -659,6 +681,23 @@ export default function DriverView() {
                   </button>
                 ))}
               </div>
+              <label className="block text-xs font-medium text-slate-600">
+                Tráfico en la ruta
+                <select
+                  value={myTruck.traffic ?? 'auto'}
+                  onChange={(e) => setTraffic(e.target.value as TrafficSetting)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                >
+                  <option value="auto">
+                    Automático por hora (ahora: {isPeakHour() ? 'pico · pesado 13 km/h' : 'valle · fluido 22 km/h'})
+                  </option>
+                  {(Object.keys(TRAFFIC_SPEED_KMH) as TrafficLevel[]).map((lvl) => (
+                    <option key={lvl} value={lvl}>
+                      {TRAFFIC_LABEL[lvl]} · {TRAFFIC_SPEED_KMH[lvl]} km/h
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 onClick={toggleSimulation}
                 disabled={route.length < 2}
@@ -748,7 +787,12 @@ export default function DriverView() {
                     )}
                     {REPORT_LABEL[r.type]}
                   </p>
-                  <span className="whitespace-nowrap text-xs font-semibold text-orange-800">{formatDistance(meters)}</span>
+                  <span className="whitespace-nowrap text-right text-xs font-semibold text-orange-800">
+                    {formatDistance(meters)}
+                    <span className="block font-normal">
+                      {formatTripTotal(estimateTrip(meters, resolveTraffic(myTruck?.traffic)))}
+                    </span>
+                  </span>
                 </div>
                 <span
                   className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${STAGE_BADGE[reportStage(r)]}`}
@@ -795,6 +839,7 @@ export default function DriverView() {
           truckInCity={cityOf(myTruck) === city.id}
           cityName={city.name}
           stops={draftStops}
+          traffic={resolveTraffic(myTruck.traffic)}
           savedCount={savedStops.length}
           dirty={JSON.stringify(draftStops) !== JSON.stringify(savedStops)}
           routeUpdatedAt={myTruck.routeUpdatedAt?.toMillis() ?? null}
