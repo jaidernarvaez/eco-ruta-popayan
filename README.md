@@ -112,14 +112,36 @@ Reglas: cualquier usuario autenticado (`request.auth != null`, incluidos los an�
 camiones y reportes y crea reportes a su nombre. Los anónimos no pueden crear perfil, así que
 nunca pueden actuar como conductores.
 
+## Etapa 5 — Experiencia ciudadana en tiempo real
+Ejecuta **`etapa5-experiencia-ciudadana.bat`**: compila, publica reglas y Hosting, hace commit/push y abre la app.
+
+- **Alertas de proximidad y ETA** (`ProximityBanner`): distancia Haversine (`src/lib/geo.ts`) entre el
+  barrio elegido —o la ubicación GPS opcional del ciudadano— y los camiones activos de la ciudad.
+  Si hay uno a menos de **1,5 km** aparece una alerta (ámbar; verde por debajo de 750 m) con la
+  distancia y el tiempo estimado a **20 km/h**, p. ej. *«🚛 ¡Camión recolector cerca! A 750 m (~2 min)…»*.
+  **Activar aviso sonoro** genera un tono suave con Web Audio API (sin archivos) una sola vez cuando
+  un camión cruza el umbral de **1 km** hacia la zona. Funciona con la página abierta.
+- **Horarios por barrio** (`src/data/schedules.ts`, `ScheduleCard`): días y franjas habituales de
+  ordinarios y reciclables/aprovechables para los barrios de las 8 ciudades, con indicador
+  «Pasa ahora / Hoy desde… / Próxima: …». Son **horarios de referencia para la demo**; en producción
+  deben reemplazarse por los publicados por el operador de aseo de cada ciudad.
+- **Trazabilidad de reportes** (`ReportsStatusPanel`): `status` = `pendiente` → `en_ruta` → `atendido`
+  (los antiguos `abierto` cuentan como pendientes). Insignias: amarillo *Pendiente*, azul *En ruta*,
+  verde *Recolectado*. El conductor usa **Voy en camino** y **Recolectado**; el ciudadano lo ve al
+  instante (onSnapshot). Se muestran los reportes de las últimas 72 h de la ciudad activa.
+- **Reglas:** los reportes nuevos nacen `pendiente`; solo un conductor avanza el estado
+  (con `assignedTo/assignedAt` o `attendedBy/attendedAt` y hora del servidor); el autor solo puede
+  retirar su reporte mientras esté pendiente.
+
 ## Estructura
 ```
 src/
-├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaCiudad, CitySelect, ReportDialog
+├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaCiudad, CitySelect, ReportDialog,
+│                 ProximityBanner, ScheduleCard, ReportsStatusPanel
 ├── context/      AuthContext (sesión + perfil/rol), CityContext (ciudad activa)
 ├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules, reports), useNow
-├── data/         cities.ts (catálogo nacional y rutas demo), seed.ts (barrios y horarios)
-├── lib/          firebase.ts, authMethods.ts, geo.ts
+├── data/         cities.ts (catálogo nacional y rutas demo), schedules.ts (horarios por barrio), seed.ts
+├── lib/          firebase.ts, authMethods.ts, geo.ts (Haversine + ETA), chime.ts (Web Audio)
 └── types.ts
 firestore.rules   Reglas de seguridad
 firebase.json     Reglas + Firebase Hosting (carpeta dist, SPA)

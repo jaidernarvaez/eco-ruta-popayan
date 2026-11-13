@@ -1,6 +1,7 @@
 import { GeoPoint, doc, getDoc, setDoc } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { CITIES } from './cities'
+import { dayNamesLong, getZoneSchedule } from './schedules'
 import type { Neighborhood, WasteType } from '../types'
 
 /** Todos los barrios del catálogo nacional en el formato de Firestore. */
@@ -16,28 +17,20 @@ export const FALLBACK_NEIGHBORHOODS: Neighborhood[] = CITIES.flatMap((c) =>
 
 export const TOTAL_ZONES = FALLBACK_NEIGHBORHOODS.length
 
-type ScheduleSeed = { days: string[]; startTime: string; endTime: string }
-const ORDINARIO_A: ScheduleSeed = { days: ['lunes', 'miércoles', 'viernes'], startTime: '06:00', endTime: '09:00' }
-const ORDINARIO_B: ScheduleSeed = { days: ['martes', 'jueves', 'sábado'], startTime: '06:00', endTime: '09:00' }
-const RECICLABLE_A: ScheduleSeed = { days: ['martes'], startTime: '14:00', endTime: '17:00' }
-const RECICLABLE_B: ScheduleSeed = { days: ['jueves'], startTime: '14:00', endTime: '17:00' }
-
+/** Horarios para Firestore, derivados del catálogo de referencia (src/data/schedules.ts). */
 export function buildSchedulesSeed(cityId?: string) {
   return CITIES.filter((c) => !cityId || c.id === cityId).flatMap((c) =>
-    c.zones.flatMap((z, i) => {
-      const ord = i % 2 === 0 ? ORDINARIO_A : ORDINARIO_B
-      const rec = i % 2 === 0 ? RECICLABLE_A : RECICLABLE_B
-      return (
-        [
-          ['ordinario', ord],
-          ['reciclable', rec],
-        ] as [WasteType, ScheduleSeed][]
-      ).map(([wasteType, s]) => ({
+    c.zones.flatMap((z) => {
+      const sched = getZoneSchedule(z.id)
+      if (!sched) return []
+      return (['ordinario', 'reciclable'] as WasteType[]).map((wasteType) => ({
         id: `${z.id}-${wasteType}`,
         neighborhoodId: z.id,
         city: c.id,
         wasteType,
-        ...s,
+        days: dayNamesLong(sched[wasteType].days),
+        startTime: sched[wasteType].start,
+        endTime: sched[wasteType].end,
       }))
     }),
   )

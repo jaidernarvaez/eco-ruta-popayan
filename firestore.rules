@@ -147,21 +147,34 @@ service cloud.firestore {
         && (!('neighborhoodId' in request.resource.data)
             || request.resource.data.neighborhoodId == null
             || request.resource.data.neighborhoodId is string)
-        && request.resource.data.status == 'abierto'
+        && request.resource.data.status == 'pendiente'
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time;
 
-      // Solo un conductor puede marcarlo como atendido (y nada más).
-      allow update: if isDriver()
-        && resource.data.status == 'abierto'
-        && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['status', 'attendedBy', 'attendedAt'])
-        && request.resource.data.status == 'atendido'
-        && request.resource.data.attendedBy == request.auth.uid
-        && request.resource.data.attendedAt == request.time;
+      // Trazabilidad: pendiente → en_ruta → atendido. Solo conductores cambian el estado.
+      // ('abierto' es el valor heredado de la Etapa 3 y equivale a 'pendiente').
+      allow update: if isDriver() && (
+        // Conductor toma el reporte: "Voy en camino"
+        (resource.data.status in ['pendiente', 'abierto']
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'assignedTo', 'assignedAt'])
+          && request.resource.data.status == 'en_ruta'
+          && request.resource.data.assignedTo == request.auth.uid
+          && request.resource.data.assignedAt == request.time)
+        ||
+        // Conductor marca el reporte como recolectado
+        (resource.data.status in ['pendiente', 'abierto', 'en_ruta']
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'attendedBy', 'attendedAt'])
+          && request.resource.data.status == 'atendido'
+          && request.resource.data.attendedBy == request.auth.uid
+          && request.resource.data.attendedAt == request.time)
+      );
 
-      // El autor puede retirar su reporte; el admin puede borrar cualquiera.
-      allow delete: if signedIn() && (resource.data.createdBy == request.auth.uid || isAdmin());
+      // El autor puede retirar su reporte mientras siga pendiente; el admin, cualquiera.
+      allow delete: if isAdmin() || (signedIn()
+        && resource.data.createdBy == request.auth.uid
+        && resource.data.status in ['pendiente', 'abierto']);
     }
 
     // Todo lo demás queda bloqueado

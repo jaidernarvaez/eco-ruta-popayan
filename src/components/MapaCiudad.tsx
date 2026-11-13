@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import L from 'leaflet'
-import { Circle, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
+import { Circle, CircleMarker, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import { AlertTriangle, MapPinPlus, Recycle, Siren, Trash2 } from 'lucide-react'
 import type { Neighborhood, Report, Truck } from '../types'
-import { REPORT_COLOR, REPORT_LABEL, STATUS_LABEL, WASTE_COLOR, WASTE_LABEL } from '../types'
+import { REPORT_COLOR, REPORT_LABEL, STAGE_LABEL, STATUS_LABEL, WASTE_COLOR, WASTE_LABEL, reportStage } from '../types'
 import type { City } from '../data/cities'
 
 function badgeIcon(content: React.ReactNode, color: string, size: number, ring = '2px solid white', square = false) {
@@ -38,7 +38,9 @@ function truckIcon(truck: Truck, highlighted: boolean) {
 
 function reportIcon(report: Report) {
   const Icon = report.type === 'recoleccion_prioritaria' ? Siren : AlertTriangle
-  return badgeIcon(<Icon size={16} />, REPORT_COLOR[report.type], 28, '2px solid white', true)
+  // Borde azul cuando un conductor ya va en camino
+  const ring = reportStage(report) === 'en_ruta' ? '3px solid #2563eb' : '2px solid white'
+  return badgeIcon(<Icon size={16} />, REPORT_COLOR[report.type], 28, ring, true)
 }
 
 const draftIcon = badgeIcon(<MapPinPlus size={20} />, '#2563eb', 36, '3px solid white')
@@ -81,6 +83,8 @@ interface Props {
   selectedNeighborhoodId?: string | null
   highlightTruckId?: string | null
   draftPoint?: [number, number] | null
+  /** Ubicación GPS del ciudadano (punto azul). */
+  userPoint?: [number, number] | null
   focus?: [number, number] | null
   picking?: boolean
   onMapClick?: (lat: number, lng: number) => void
@@ -95,6 +99,7 @@ export default function MapaCiudad({
   selectedNeighborhoodId,
   highlightTruckId,
   draftPoint,
+  userPoint = null,
   focus = null,
   picking = false,
   onMapClick,
@@ -134,7 +139,7 @@ export default function MapaCiudad({
       {reports.map((r) => (
         <Marker key={r.id} position={[r.location.latitude, r.location.longitude]} icon={reportIcon(r)}>
           <Popup>
-            <strong>{REPORT_LABEL[r.type]}</strong>
+            <strong>{REPORT_LABEL[r.type]}</strong> · {STAGE_LABEL[reportStage(r)]}
             {r.description && (
               <>
                 <br />
@@ -167,6 +172,16 @@ export default function MapaCiudad({
           </Popup>
         </Marker>
       ))}
+
+      {userPoint && (
+        <CircleMarker
+          center={userPoint}
+          radius={8}
+          pathOptions={{ color: 'white', weight: 3, fillColor: '#2563eb', fillOpacity: 1 }}
+        >
+          <Tooltip>Tu ubicación</Tooltip>
+        </CircleMarker>
+      )}
 
       {draftPoint && <Marker position={draftPoint} icon={draftIcon} zIndexOffset={2000} />}
     </MapContainer>

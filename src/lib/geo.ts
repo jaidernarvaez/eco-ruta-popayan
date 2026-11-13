@@ -25,7 +25,7 @@ export function insideCity(lat: number, lng: number, city: City) {
 }
 
 export function formatDistance(meters: number) {
-  return meters < 1000 ? `${Math.round(meters / 10) * 10} m` : `${(meters / 1000).toFixed(1)} km`
+  return meters < 1000 ? `${Math.round(meters / 10) * 10} m` : `${(meters / 1000).toFixed(1).replace('.', ',')} km`
 }
 
 /** Barrio más cercano (dentro de `maxMeters`) a una coordenada. */
@@ -41,4 +41,17 @@ export function nearestNeighborhood<T extends { id: string; center: { latitude: 
     if (d < best.d) best = { id: n.id, d }
   }
   return best.id
+}
+
+/** Velocidad urbana promedio supuesta para el camión recolector. */
+export const TRUCK_SPEED_KMH = 20
+
+/** Minutos estimados de llegada a velocidad urbana promedio (mínimo 1). */
+export function etaMinutes(meters: number, speedKmh = TRUCK_SPEED_KMH) {
+  return Math.max(1, Math.round(meters / ((speedKmh * 1000) / 60)))
+}
+
+export function formatEta(meters: number) {
+  const m = etaMinutes(meters)
+  return m < 60 ? `~${m} min` : `~${Math.floor(m / 60)} h ${m % 60} min`
 }

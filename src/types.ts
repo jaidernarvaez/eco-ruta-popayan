@@ -62,7 +62,9 @@ export const STATUS_LABEL: Record<TruckStatus, string> = {
 
 /** Colección `reports`: reportes ciudadanos / alertas ambientales */
 export type ReportType = 'acumulacion' | 'recoleccion_prioritaria'
-export type ReportStatus = 'abierto' | 'atendido'
+/** `abierto` = valor heredado de la Etapa 3 (se trata como `pendiente`). */
+export type ReportStatus = 'pendiente' | 'en_ruta' | 'atendido' | 'abierto'
+export type ReportStage = Exclude<ReportStatus, 'abierto'>
 
 export interface Report {
   id: string
@@ -74,8 +76,28 @@ export interface Report {
   status: ReportStatus
   createdBy: string
   createdAt: Timestamp | null
+  assignedTo?: string
+  assignedAt?: Timestamp | null
   attendedBy?: string
   attendedAt?: Timestamp | null
+}
+
+/** Estado normalizado de un reporte (los antiguos `abierto` cuentan como `pendiente`). */
+export function reportStage(r: Pick<Report, 'status'>): ReportStage {
+  return r.status === 'abierto' ? 'pendiente' : r.status
+}
+
+export const STAGE_LABEL: Record<ReportStage, string> = {
+  pendiente: 'Pendiente',
+  en_ruta: 'En ruta',
+  atendido: 'Recolectado',
+}
+
+/** Insignias: amarillo pendiente, azul en ruta, verde recolectado. */
+export const STAGE_BADGE: Record<ReportStage, string> = {
+  pendiente: 'bg-yellow-100 text-yellow-800 ring-yellow-300',
+  en_ruta: 'bg-blue-100 text-blue-800 ring-blue-300',
+  atendido: 'bg-green-100 text-green-800 ring-green-300',
 }
 
 export const REPORT_LABEL: Record<ReportType, string> = {

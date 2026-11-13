@@ -36,7 +36,7 @@ export default function ReportDialog({ point, cityId, cityName, neighborhoodId, 
         location: new GeoPoint(point[0], point[1]),
         city: cityId,
         neighborhoodId,
-        status: 'abierto',
+        status: 'pendiente',
         createdBy: user.uid,
         createdAt: serverTimestamp(),
       })

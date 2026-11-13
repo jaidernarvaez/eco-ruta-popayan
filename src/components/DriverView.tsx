@@ -28,12 +28,12 @@ import CitySelect from './CitySelect'
 import { db } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
 import { useCity } from '../context/CityContext'
-import { cityOf, useNeighborhoods, useOpenReports, useTrucks } from '../hooks/useFirestoreData'
+import { cityOf, useNeighborhoods, useRecentReports, useTrucks } from '../hooks/useFirestoreData'
 import { timeAgo, useNow } from '../hooks/useNow'
 import { seedBaseData } from '../data/seed'
 import { DEMO_TRUCKS, getCity, routeFor } from '../data/cities'
 import { distanceMeters, formatDistance, insideCity, nearestNeighborhood } from '../lib/geo'
-import { REPORT_LABEL, STATUS_LABEL, type Neighborhood, type Report, type Truck, type TruckStatus, type WasteType } from '../types'
+import { REPORT_LABEL, STAGE_BADGE, STAGE_LABEL, STATUS_LABEL, reportStage, type Neighborhood, type Report, type Truck, type TruckStatus, type WasteType } from '../types'
 
 const STEP_DEG = 0.0007 // ~78 m por paso
 const TICK_MS = 2000 // recorrido de un camión: una escritura cada 2 s
@@ -59,11 +59,15 @@ export default function DriverView() {
   const { items: allTrucks, error } = useTrucks()
   const { items: neighborhoods, stored } = useNeighborhoods(city.id)
   const { items: allNeighborhoods } = useNeighborhoods()
-  const { items: allReports } = useOpenReports()
+  const { items: allReports } = useRecentReports(72)
   const now = useNow(15000)
 
   const trucks = useMemo(() => allTrucks.filter((t) => cityOf(t) === city.id), [allTrucks, city.id])
-  const reports = useMemo(() => allReports.filter((r) => cityOf(r) === city.id), [allReports, city.id])
+  // Reportes por atender (pendientes o en ruta) de la ciudad activa
+  const reports = useMemo(
+    () => allReports.filter((r) => cityOf(r) === city.id && reportStage(r) !== 'atendido'),
+    [allReports, city.id],
+  )
 
   // Mis camiones en todas las ciudades
   const myTrucks = useMemo(() => allTrucks.filter((t) => t.driverId === user?.uid), [allTrucks, user])
@@ -107,6 +111,10 @@ export default function DriverView() {
     return reports
       .map((r) => ({ r, meters: distanceMeters(from[0], from[1], r.location.latitude, r.location.longitude) }))
       .sort((a, b) => {
+        // Primero los que ya tomé (en ruta), luego los prioritarios, luego por distancia
+        const ea = reportStage(a.r) === 'en_ruta' ? 0 : 1
+        const eb = reportStage(b.r) === 'en_ruta' ? 0 : 1
+        if (ea !== eb) return ea - eb
         const pa = a.r.type === 'recoleccion_prioritaria' ? 0 : 1
         const pb = b.r.type === 'recoleccion_prioritaria' ? 0 : 1
         return pa - pb || a.meters - b.meters
@@ -283,6 +291,20 @@ export default function DriverView() {
     setSelectedId(null)
   }
 
+  async function takeReport(r: Report) {
+    if (!user) return
+    try {
+      await updateDoc(doc(db, 'reports', r.id), {
+        status: 'en_ruta',
+        assignedTo: user.uid,
+        assignedAt: serverTimestamp(),
+      })
+      setMessage('Reporte marcado «En ruta»: el ciudadano ya ve que vas en camino.')
+    } catch (e) {
+      fail(e)
+    }
+  }
+
   async function attendReport(r: Report) {
     if (!user) return
     try {
@@ -291,7 +313,7 @@ export default function DriverView() {
         attendedBy: user.uid,
         attendedAt: serverTimestamp(),
       })
-      setMessage('Reporte marcado como atendido.')
+      setMessage('Reporte marcado como recolectado.')
     } catch (e) {
       fail(e)
     }
@@ -476,6 +498,11 @@ export default function DriverView() {
                   </p>
                   <span className="whitespace-nowrap text-xs font-semibold text-orange-800">{formatDistance(meters)}</span>
                 </div>
+                <span
+                  className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${STAGE_BADGE[reportStage(r)]}`}
+                >
+                  {STAGE_LABEL[reportStage(r)]}
+                </span>
                 <p className="text-xs text-orange-800/80">
                   {allNeighborhoods.find((n) => n.id === r.neighborhoodId)?.name ?? 'Sin barrio'} ·{' '}
                   {timeAgo(r.createdAt?.toMillis(), now)}
@@ -487,11 +514,19 @@ export default function DriverView() {
                   >
                     Ver en mapa
                   </button>
+                  {reportStage(r) === 'pendiente' && (
+                    <button
+                      onClick={() => takeReport(r)}
+                      className="flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white"
+                    >
+                      <Navigation className="h-3 w-3" /> Voy en camino
+                    </button>
+                  )}
                   <button
                     onClick={() => attendReport(r)}
                     className="flex items-center gap-1 rounded-md bg-eco-600 px-2 py-1 text-xs font-medium text-white"
                   >
-                    <CheckCircle2 className="h-3 w-3" /> Atendido
+                    <CheckCircle2 className="h-3 w-3" /> Recolectado
                   </button>
                 </div>
               </li>
@@ -520,13 +555,22 @@ export default function DriverView() {
             moveTruck(lat, lng).catch(fail)
           }}
           renderReportActions={(r) => (
-            <button
-              onClick={() => attendReport(r)}
-              style={{ marginTop: 6, display: 'block' }}
-              className="rounded bg-eco-600 px-2 py-1 text-xs font-semibold text-white"
-            >
-              Marcar como atendido
-            </button>
+            <span style={{ marginTop: 6, display: 'flex', gap: 4 }}>
+              {reportStage(r) === 'pendiente' && (
+                <button
+                  onClick={() => takeReport(r)}
+                  className="rounded bg-blue-600 px-2 py-1 text-xs font-semibold text-white"
+                >
+                  Voy en camino
+                </button>
+              )}
+              <button
+                onClick={() => attendReport(r)}
+                className="rounded bg-eco-600 px-2 py-1 text-xs font-semibold text-white"
+              >
+                Recolectado
+              </button>
+            </span>
           )}
         />
       </section>

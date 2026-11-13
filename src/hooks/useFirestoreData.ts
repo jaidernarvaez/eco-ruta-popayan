@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { collection, onSnapshot, query, where, type QueryConstraint } from 'firebase/firestore'
+import { Timestamp, collection, onSnapshot, query, where, type QueryConstraint } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { FALLBACK_NEIGHBORHOODS } from '../data/seed'
 import { DEFAULT_CITY_ID, cityOfZone } from '../data/cities'
@@ -29,10 +29,17 @@ function useCollection<T>(path: string, constraints: QueryConstraint[] = [], key
 export const useTrucks = () => useCollection<Truck>('trucks')
 export const useSchedules = () => useCollection<Schedule>('schedules')
 
-/** Reportes ciudadanos abiertos, del más reciente al más antiguo. */
-export function useOpenReports() {
-  const constraints = useMemo(() => [where('status', '==', 'abierto')], [])
-  const { items, error } = useCollection<Report>('reports', constraints, 'abiertos')
+/**
+ * Reportes ciudadanos de las últimas `hours` horas (todos los estados), del más
+ * reciente al más antiguo. Consulta por rango de `createdAt` (índice simple,
+ * sin índices compuestos); el filtro por ciudad y estado se hace en el cliente.
+ */
+export function useRecentReports(hours = 72) {
+  const constraints = useMemo(
+    () => [where('createdAt', '>=', Timestamp.fromMillis(Date.now() - hours * 3600_000))],
+    [hours],
+  )
+  const { items, error } = useCollection<Report>('reports', constraints, `recientes-${hours}`)
   const sorted = useMemo(
     () => [...items].sort((a, b) => (b.createdAt?.toMillis() ?? Infinity) - (a.createdAt?.toMillis() ?? Infinity)),
     [items],
