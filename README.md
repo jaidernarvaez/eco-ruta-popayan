@@ -133,15 +133,35 @@ Ejecuta **`etapa5-experiencia-ciudadana.bat`**: compila, publica reglas y Hostin
   (con `assignedTo/assignedAt` o `attendedBy/attendedAt` y hora del servidor); el autor solo puede
   retirar su reporte mientras esté pendiente.
 
+## Etapa 6 — Ajuste y optimización de rutas (Conductor)
+Ejecuta **`etapa6-rutas-conductor.bat`**: compila, publica reglas y Hosting, hace commit/push y abre la app.
+
+- **Editor visual de trazado** (`RoutePlanner`): «Editar trazado en el mapa» convierte cada clic en
+  una parada numerada (polilínea morada punteada mientras se edita, azul al guardar). Incluye
+  **Deshacer último punto**, **Limpiar ruta**, **Optimizar orden**, **Descartar cambios** y
+  **Guardar trazado en Firestore**, con distancia total en km y minutos estimados a 20 km/h.
+  El trazado se guarda en `trucks/{id}.route` (lista de GeoPoint, máx. 60) y «Recorrer mi trazado»
+  lo sigue parada por parada; sin trazado propio se usa la ruta demo de la ciudad.
+- **Optimización automática** (`optimizeRoute` en `src/lib/geo.ts`): Vecino Más Cercano + mejora
+  local 2-opt y Or-opt con distancia Haversine, para un recorrido abierto que parte de la posición
+  actual del camión. **«Optimizar ruta con reportes activos»** toma todos los reportes `pendiente`
+  y `en_ruta` de la ciudad, calcula el orden más corto, lo guarda como ruta del camión y muestra los
+  km ahorrados frente al orden de llegada. En pruebas con 300 casos aleatorios (2 a 7 paradas)
+  encontró el óptimo exacto en 295 y nunca superó el 4,5 % sobre él; 60 paradas en ~1 s.
+- **GPS real** («Usar GPS real de mi dispositivo»): `navigator.geolocation.watchPosition` envía la
+  posición real del conductor a Firestore (máx. una escritura cada 3 s si se mueve ≥ 10 m, o cada
+  30 s si está quieto), detecta la ciudad del catálogo más cercana y permite desvíos libres.
+  Requiere permiso de ubicación y HTTPS (Firebase Hosting ya lo tiene).
+
 ## Estructura
 ```
 src/
 ├── components/   LoginPage, RoleSelect, CitizenView, DriverView, MapaCiudad, CitySelect, ReportDialog,
-│                 ProximityBanner, ScheduleCard, ReportsStatusPanel
+│                 ProximityBanner, ScheduleCard, ReportsStatusPanel, RoutePlanner
 ├── context/      AuthContext (sesión + perfil/rol), CityContext (ciudad activa)
 ├── hooks/        useFirestoreData (onSnapshot de trucks, neighborhoods, schedules, reports), useNow
 ├── data/         cities.ts (catálogo nacional y rutas demo), schedules.ts (horarios por barrio), seed.ts
-├── lib/          firebase.ts, authMethods.ts, geo.ts (Haversine + ETA), chime.ts (Web Audio)
+├── lib/          firebase.ts, authMethods.ts, geo.ts (Haversine, ETA y optimización de rutas), chime.ts (Web Audio)
 └── types.ts
 firestore.rules   Reglas de seguridad
 firebase.json     Reglas + Firebase Hosting (carpeta dist, SPA)

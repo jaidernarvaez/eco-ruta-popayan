@@ -17,6 +17,9 @@ export interface Truck {
   city?: string
   neighborhoodId: string | null
   updatedAt: Timestamp | null
+  /** Trazado del recorrido definido por el conductor (paradas en orden). */
+  route?: GeoPoint[]
+  routeUpdatedAt?: Timestamp | null
 }
 
 /** Colección `neighborhoods` */

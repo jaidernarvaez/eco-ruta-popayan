@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import L from 'leaflet'
-import { Circle, CircleMarker, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
+import { Circle, CircleMarker, MapContainer, Polyline, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import { AlertTriangle, MapPinPlus, Recycle, Siren, Trash2 } from 'lucide-react'
 import type { Neighborhood, Report, Truck } from '../types'
 import { REPORT_COLOR, REPORT_LABEL, STAGE_LABEL, STATUS_LABEL, WASTE_COLOR, WASTE_LABEL, reportStage } from '../types'
@@ -45,6 +45,15 @@ function reportIcon(report: Report) {
 
 const draftIcon = badgeIcon(<MapPinPlus size={20} />, '#2563eb', 36, '3px solid white')
 
+function stopIcon(n: number, editing: boolean) {
+  return badgeIcon(
+    <span style={{ fontSize: 11, fontWeight: 700 }}>{n}</span>,
+    editing ? '#7c3aed' : '#2563eb',
+    22,
+    '2px solid white',
+  )
+}
+
 function FlyTo({ target }: { target: [number, number] | null }) {
   const map = useMap()
   useEffect(() => {
@@ -83,6 +92,8 @@ interface Props {
   selectedNeighborhoodId?: string | null
   highlightTruckId?: string | null
   draftPoint?: [number, number] | null
+  /** Trazado del camión: línea desde su posición por las paradas numeradas. */
+  plannedRoute?: { from: [number, number] | null; stops: [number, number][]; editing: boolean } | null
   /** Ubicación GPS del ciudadano (punto azul). */
   userPoint?: [number, number] | null
   focus?: [number, number] | null
@@ -100,6 +111,7 @@ export default function MapaCiudad({
   highlightTruckId,
   draftPoint,
   userPoint = null,
+  plannedRoute = null,
   focus = null,
   picking = false,
   onMapClick,
@@ -135,6 +147,25 @@ export default function MapaCiudad({
           <Tooltip direction="center">{n.name}</Tooltip>
         </Circle>
       ))}
+
+      {plannedRoute && plannedRoute.stops.length > 0 && (
+        <>
+          <Polyline
+            positions={plannedRoute.from ? [plannedRoute.from, ...plannedRoute.stops] : plannedRoute.stops}
+            pathOptions={{
+              color: plannedRoute.editing ? '#7c3aed' : '#2563eb',
+              weight: 5,
+              opacity: 0.8,
+              dashArray: plannedRoute.editing ? '8 8' : undefined,
+            }}
+          />
+          {plannedRoute.stops.map((p, i) => (
+            <Marker key={`stop-${i}`} position={p} icon={stopIcon(i + 1, plannedRoute.editing)} zIndexOffset={500}>
+              <Tooltip>Parada {i + 1}</Tooltip>
+            </Marker>
+          ))}
+        </>
+      )}
 
       {reports.map((r) => (
         <Marker key={r.id} position={[r.location.latitude, r.location.longitude]} icon={reportIcon(r)}>

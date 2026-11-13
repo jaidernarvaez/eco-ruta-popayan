@@ -69,7 +69,8 @@ service cloud.firestore {
     // ── trucks/{truckId}: camiones y su posición GPS ────────
     function validTruck(d) {
       return d.keys().hasOnly(['plate', 'wasteType', 'status', 'location', 'driverId',
-                               'driverEmail', 'neighborhoodId', 'updatedAt', 'city'])
+                               'driverEmail', 'neighborhoodId', 'updatedAt', 'city',
+                               'route', 'routeUpdatedAt'])
         && d.keys().hasAll(['plate', 'wasteType', 'status', 'location', 'driverId', 'updatedAt'])
         && d.plate is string && d.plate.matches('^[A-Z]{3}[0-9]{3}$')
         && validWasteType(d.wasteType)
@@ -77,6 +78,9 @@ service cloud.firestore {
         && inColombia(d.location)
         && (!('neighborhoodId' in d) || d.neighborhoodId == null || d.neighborhoodId is string)
         && optionalCity(d)
+        // Trazado del conductor: lista de paradas (GeoPoint), máximo 60
+        && (!('route' in d) || (d.route is list && d.route.size() <= 60))
+        && (!('routeUpdatedAt' in d) || d.routeUpdatedAt is timestamp)
         && d.updatedAt == request.time;
     }
 
@@ -95,7 +99,8 @@ service cloud.firestore {
         && (resource.data.driverId == request.auth.uid || isAdmin())
         && validTruck(request.resource.data)
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['location', 'status', 'neighborhoodId', 'updatedAt', 'city']);
+             .hasOnly(['location', 'status', 'neighborhoodId', 'updatedAt', 'city',
+                     'route', 'routeUpdatedAt']);
 
       allow delete: if isAdmin() || (isDriver() && resource.data.driverId == request.auth.uid);
     }

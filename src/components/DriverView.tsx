@@ -22,7 +22,9 @@ import {
   Trash,
   Truck as TruckIcon,
   Zap,
+  Satellite,
 } from 'lucide-react'
+import RoutePlanner from './RoutePlanner'
 import MapaCiudad from './MapaCiudad'
 import CitySelect from './CitySelect'
 import { db } from '../lib/firebase'
@@ -31,8 +33,8 @@ import { useCity } from '../context/CityContext'
 import { cityOf, useNeighborhoods, useRecentReports, useTrucks } from '../hooks/useFirestoreData'
 import { timeAgo, useNow } from '../hooks/useNow'
 import { seedBaseData } from '../data/seed'
-import { DEMO_TRUCKS, getCity, routeFor } from '../data/cities'
-import { distanceMeters, formatDistance, insideCity, nearestNeighborhood } from '../lib/geo'
+import { CITIES, DEMO_TRUCKS, getCity, routeFor } from '../data/cities'
+import { CITY_RADIUS_M, distanceMeters, formatDistance, insideCity, nearestNeighborhood, optimizeRoute, type LatLng } from '../lib/geo'
 import { REPORT_LABEL, STAGE_BADGE, STAGE_LABEL, STATUS_LABEL, reportStage, type Neighborhood, type Report, type Truck, type TruckStatus, type WasteType } from '../types'
 
 const STEP_DEG = 0.0007 // ~78 m por paso
@@ -83,7 +85,29 @@ export default function DriverView() {
   const [busy, setBusy] = useState(false)
   const [focus, setFocus] = useState<[number, number] | null>(null)
 
-  const route = useMemo(() => routeFor(city.id), [city.id])
+  // Editor de trazado (paradas del camión seleccionado)
+  const [editing, setEditing] = useState(false)
+  const [draftStops, setDraftStops] = useState<LatLng[]>([])
+  const savedStops = useMemo<LatLng[]>(
+    () => (myTruck?.route ?? []).map((g) => [g.latitude, g.longitude]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [myTruck?.id, myTruck?.routeUpdatedAt?.toMillis(), myTruck?.route?.length],
+  )
+  // Al cambiar de camión o recibir un trazado nuevo (y no estar editando), se carga el guardado
+  useEffect(() => {
+    if (!editing) setDraftStops(savedStops)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedStops])
+
+  // GPS real del dispositivo
+  const [gpsOn, setGpsOn] = useState(false)
+  const [gpsInfo, setGpsInfo] = useState<{ accuracy: number; at: string } | null>(null)
+  const [gpsError, setGpsError] = useState<string | null>(null)
+
+  /** Si el camión tiene trazado propio en la ciudad activa, el simulador lo sigue; si no, usa la ruta demo. */
+  const customRoute = savedStops.length > 0 && myTruck && cityOf(myTruck) === city.id ? savedStops : null
+  const demoRoute = useMemo(() => routeFor(city.id), [city.id])
+  const route = customRoute ?? demoRoute
   const posRef = useRef<[number, number] | null>(null)
   const waypointRef = useRef(0)
   const allStateRef = useRef<Record<string, { pos: [number, number]; waypoint: number }>>({})
@@ -155,9 +179,15 @@ export default function DriverView() {
 
   // Recorrido automático del camión seleccionado (en la ciudad activa)
   useEffect(() => {
-    if (!simulating || !myTruck || route.length < 2) return
+    if (!simulating || !myTruck || route.length < 1) return
+    const isCustom = !!customRoute
     const id = window.setInterval(() => {
       if (!posRef.current) return
+      if (isCustom && waypointRef.current >= route.length) {
+        setSimulating(false)
+        setMessage(`Ruta completada: ${myTruck.plate} llegó a la última parada.`)
+        return
+      }
       const { next, waypoint } = stepAlong(posRef.current, route, waypointRef.current)
       waypointRef.current = waypoint
       moveTruck(next[0], next[1], { status: 'en_ruta' }).catch((e) => {
@@ -166,7 +196,7 @@ export default function DriverView() {
       })
     }, TICK_MS)
     return () => window.clearInterval(id)
-  }, [simulating, myTruck?.id, route])
+  }, [simulating, myTruck?.id, route, customRoute])
 
   // Recorrido simultáneo de todos mis camiones, cada uno en la ruta demo de su ciudad
   useEffect(() => {
@@ -200,6 +230,8 @@ export default function DriverView() {
     }
     if (!myTruck) return
     setSimulatingAll(false)
+    setGpsOn(false)
+    waypointRef.current = 0
     // Si el camión está en otra ciudad, se traslada al inicio de la ruta de la ciudad activa
     if (cityOf(myTruck) !== city.id || !insideCity(myTruck.location.latitude, myTruck.location.longitude, city)) {
       const start = route[0] ?? [city.lat, city.lng]
@@ -209,10 +241,170 @@ export default function DriverView() {
         fail(e)
         return
       }
-      waypointRef.current = 1
+      waypointRef.current = customRoute ? 0 : 1
       setMessage(`Camión ${myTruck.plate} trasladado a ${city.name} para iniciar la ruta.`)
     }
     setSimulating(true)
+  }
+
+  // ── GPS real del dispositivo ──────────────────────────────
+  const allNeighborhoodsRef = useRef(allNeighborhoods)
+  allNeighborhoodsRef.current = allNeighborhoods
+  const cityIdRef = useRef(city.id)
+  cityIdRef.current = city.id
+
+  const gpsTruckRef = useRef<Truck | null>(null)
+  gpsTruckRef.current = myTruck
+  const lastGpsWrite = useRef<{ at: number; pos: LatLng } | null>(null)
+
+  useEffect(() => {
+    if (!gpsOn) return
+    if (!navigator.geolocation) {
+      setGpsError('Este dispositivo no permite obtener la ubicación.')
+      return
+    }
+    lastGpsWrite.current = null
+    const id = navigator.geolocation.watchPosition(
+      (p) => {
+        const truck = gpsTruckRef.current
+        if (!truck) return
+        const pos: LatLng = [p.coords.latitude, p.coords.longitude]
+        setGpsInfo({ accuracy: Math.round(p.coords.accuracy), at: new Date().toLocaleTimeString('es-CO') })
+        // Ciudad del catálogo más cercana (dentro del radio de ciudad)
+        const near = CITIES.map((c) => ({ c, d: distanceMeters(pos[0], pos[1], c.lat, c.lng) })).sort((a, b) => a.d - b.d)[0]
+        if (!near || near.d > CITY_RADIUS_M) {
+          setGpsError('Tu ubicación no está dentro de una ciudad del catálogo; no se envía a Firestore.')
+          return
+        }
+        setGpsError(null)
+        // Limita escrituras: si se movió ≥ 10 m (máx. 1 cada 3 s) o cada 30 s aunque esté quieto
+        const last = lastGpsWrite.current
+        const now = Date.now()
+        const moved = last ? distanceMeters(last.pos[0], last.pos[1], pos[0], pos[1]) : Infinity
+        if (last && (now - last.at < 3000 || (moved < 10 && now - last.at < 30000))) return
+        lastGpsWrite.current = { at: now, pos }
+        const zones = allNeighborhoodsRef.current.filter((n) => n.city === near.c.id)
+        writePosition(truck, pos[0], pos[1], near.c.id, zones, { status: 'en_ruta' })
+          .then(() => {
+            setLastWrite(new Date().toLocaleTimeString('es-CO'))
+            if (near.c.id !== cityIdRef.current) setCityId(near.c.id)
+          })
+          .catch((e) => {
+            fail(e)
+            setGpsOn(false)
+          })
+      },
+      (err) => {
+        setGpsError(
+          err.code === err.PERMISSION_DENIED
+            ? 'Permiso de ubicación denegado. Actívalo en el navegador para usar el GPS real.'
+            : 'No se pudo leer el GPS del dispositivo.',
+        )
+        setGpsOn(false)
+      },
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
+    )
+    return () => navigator.geolocation.clearWatch(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gpsOn])
+
+  function toggleGps() {
+    if (gpsOn) {
+      setGpsOn(false)
+      setGpsInfo(null)
+      return
+    }
+    if (!myTruck) return
+    if (!navigator.geolocation) {
+      setGpsError('Este dispositivo no permite obtener la ubicación.')
+      return
+    }
+    setSimulating(false)
+    setSimulatingAll(false)
+    setGpsError(null)
+    setGpsOn(true)
+    setMessage(`GPS real activo: ${myTruck.plate} sigue la ubicación de este dispositivo.`)
+  }
+
+  // ── Editor y optimización del trazado ─────────────────────
+  const MAX_STOPS = 60
+
+  function addStop(lat: number, lng: number) {
+    if (!insideCity(lat, lng, city)) {
+      setMessage(`Esa parada está fuera del área de ${city.name}.`)
+      return
+    }
+    setDraftStops((prev) => {
+      if (prev.length >= MAX_STOPS) {
+        setMessage(`Máximo ${MAX_STOPS} paradas por ruta.`)
+        return prev
+      }
+      return [...prev, [lat, lng]]
+    })
+  }
+
+  async function saveRoute(stops: LatLng[] = draftStops) {
+    if (!myTruck) return
+    if (cityOf(myTruck) !== city.id) {
+      setMessage(`El camión ${myTruck.plate} está en ${getCity(cityOf(myTruck)).name}. Cambia a esa ciudad para editar su ruta.`)
+      return
+    }
+    try {
+      await updateDoc(doc(db, 'trucks', myTruck.id), {
+        route: stops.map(([lat, lng]) => new GeoPoint(lat, lng)),
+        routeUpdatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      setEditing(false)
+      setMessage(
+        stops.length
+          ? `Trazado guardado: ${stops.length} parada(s). «Iniciar ruta» lo seguirá.`
+          : 'Ruta borrada. El simulador vuelve a la ruta demo de la ciudad.',
+      )
+    } catch (e) {
+      fail(e)
+    }
+  }
+
+  function truckPos(): LatLng | null {
+    return myTruck ? [myTruck.location.latitude, myTruck.location.longitude] : null
+  }
+
+  async function optimizeWithReports() {
+    const start = truckPos()
+    if (!myTruck || !start) return
+    if (cityOf(myTruck) !== city.id) {
+      setMessage(`El camión ${myTruck.plate} está en otra ciudad. Inicia su ruta en ${city.name} primero.`)
+      return
+    }
+    const targets = reports.slice(0, MAX_STOPS).map((r) => [r.location.latitude, r.location.longitude] as LatLng)
+    if (targets.length === 0) {
+      setMessage(`No hay reportes pendientes o en ruta en ${city.name} para optimizar.`)
+      return
+    }
+    setBusy(true)
+    // Se cede el hilo para que la interfaz muestre "Procesando…" antes del cálculo
+    await new Promise((r) => setTimeout(r, 30))
+    const result = optimizeRoute(start, targets)
+    setDraftStops(result.stops)
+    setBusy(false)
+    await saveRoute(result.stops)
+    const saved = result.beforeMeters - result.afterMeters
+    setMessage(
+      `Ruta optimizada con ${result.stops.length} reporte(s): ${(result.afterMeters / 1000).toFixed(2)} km` +
+        (saved > 1 ? ` (ahorra ${(saved / 1000).toFixed(2)} km frente al orden de llegada).` : '.'),
+    )
+  }
+
+  function optimizeCurrentOrder() {
+    const start = truckPos()
+    if (!start || draftStops.length < 2) return
+    const result = optimizeRoute(start, draftStops)
+    setDraftStops(result.stops)
+    setEditing(true)
+    setMessage(
+      `Orden optimizado: ${(result.beforeMeters / 1000).toFixed(2)} km → ${(result.afterMeters / 1000).toFixed(2)} km. Pulsa «Guardar trazado» para aplicarlo.`,
+    )
   }
 
   async function createTruckDoc(p: string, type: WasteType, cityId: string) {
@@ -440,7 +632,11 @@ export default function DriverView() {
                 }`}
               >
                 {simulating ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                {simulating ? 'Detener recorrido' : `Iniciar ruta en ${city.name}`}
+                {simulating
+                  ? 'Detener recorrido'
+                  : customRoute
+                    ? `Recorrer mi trazado (${customRoute.length} paradas)`
+                    : `Iniciar ruta demo en ${city.name}`}
               </button>
               <button
                 onClick={() => {
@@ -456,9 +652,26 @@ export default function DriverView() {
                 <Zap className="h-4 w-4" />
                 {simulatingAll ? 'Detener todos' : 'Mover todos mis camiones'}
               </button>
+              <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <span className="flex items-center gap-2 font-medium">
+                  <Satellite className={`h-4 w-4 ${gpsOn ? 'animate-pulse text-blue-600' : 'text-slate-500'}`} />
+                  Usar GPS real de mi dispositivo
+                </span>
+                <input type="checkbox" className="h-4 w-4 accent-blue-600" checked={gpsOn} onChange={toggleGps} />
+              </label>
+              {gpsOn && (
+                <p className="text-xs text-blue-700">
+                  {gpsInfo ? `Señal: ±${gpsInfo.accuracy} m · ${gpsInfo.at}` : 'Esperando señal GPS…'}
+                </p>
+              )}
+              {gpsError && <p className="text-xs text-red-600">{gpsError}</p>}
               <p className="flex items-start gap-2 text-xs text-slate-600">
                 <MousePointerClick className="mt-0.5 h-4 w-4 shrink-0" />
-                O toca el mapa para mover el camión a ese punto de {city.name}.
+                {editing
+                  ? 'Modo edición: cada clic en el mapa agrega una parada.'
+                  : gpsOn
+                    ? 'El camión sigue tu GPS; puedes desviarte libremente.'
+                    : `O toca el mapa para mover el camión a ese punto de ${city.name}.`}
               </p>
               <div className="grid grid-cols-2 gap-x-2 rounded-lg bg-slate-50 p-2 font-mono text-[11px] text-slate-700">
                 <span>lat {myTruck.location.latitude.toFixed(5)}</span>
@@ -536,6 +749,38 @@ export default function DriverView() {
         </div>
       </section>
 
+      {myTruck && (
+        <RoutePlanner
+          plate={myTruck.plate}
+          truckPos={[myTruck.location.latitude, myTruck.location.longitude]}
+          truckInCity={cityOf(myTruck) === city.id}
+          cityName={city.name}
+          stops={draftStops}
+          savedCount={savedStops.length}
+          dirty={JSON.stringify(draftStops) !== JSON.stringify(savedStops)}
+          routeUpdatedAt={myTruck.routeUpdatedAt?.toMillis() ?? null}
+          editing={editing}
+          busy={busy}
+          openReports={reports.length}
+          onToggleEditing={() => {
+            setSimulating(false)
+            setEditing((v) => !v)
+          }}
+          onUndo={() => setDraftStops((p) => p.slice(0, -1))}
+          onClear={() => {
+            setDraftStops([])
+            setEditing(true)
+          }}
+          onSave={() => saveRoute()}
+          onDiscard={() => {
+            setDraftStops(savedStops)
+            setEditing(false)
+          }}
+          onOptimizeReports={optimizeWithReports}
+          onOptimizeOrder={optimizeCurrentOrder}
+        />
+      )}
+
       {(message || error) && (
         <p className="rounded-lg bg-white p-3 text-sm text-slate-700 shadow">{error ?? message}</p>
       )}
@@ -549,7 +794,20 @@ export default function DriverView() {
           highlightTruckId={myTruck?.id}
           focus={focus}
           picking={!!myTruck}
+          plannedRoute={
+            myTruck && cityOf(myTruck) === city.id && draftStops.length > 0
+              ? { from: [myTruck.location.latitude, myTruck.location.longitude], stops: draftStops, editing }
+              : null
+          }
           onMapClick={(lat, lng) => {
+            if (editing) {
+              addStop(lat, lng)
+              return
+            }
+            if (gpsOn) {
+              setMessage('El GPS real está activo. Desactívalo para mover el camión manualmente.')
+              return
+            }
             setSimulating(false)
             setSimulatingAll(false)
             moveTruck(lat, lng).catch(fail)
